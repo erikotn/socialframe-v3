@@ -1934,6 +1934,17 @@ Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
             const [uploading, setUploading] = useState(false);
             const [uploaded, setUploaded] = useState(false);
 
+            // Body heeft default overflow-hidden voor de main app — in share-mode
+            // willen we wel kunnen scrollen.
+            useEffect(() => {
+                document.body.classList.remove('overflow-hidden', 'h-screen');
+                document.body.classList.add('min-h-screen');
+                return () => {
+                    document.body.classList.add('overflow-hidden', 'h-screen');
+                    document.body.classList.remove('min-h-screen');
+                };
+            }, []);
+
             useEffect(() => {
                 let cancelled = false;
                 (async () => {
@@ -2008,10 +2019,49 @@ Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
                         />
                     </div>
 
-                    <label className="bg-white text-black font-bold py-3 px-6 rounded-lg hover:bg-gray-200 cursor-pointer text-sm">
-                        {uploading ? 'Bezig met uploaden…' : (design.content?.mainImage ? 'Vervang foto' : 'Upload foto')}
-                        <input type="file" accept="image/*" onChange={handleUpload} disabled={uploading} className="hidden" />
-                    </label>
+                    <div className="flex flex-wrap gap-2 justify-center">
+                        <label className="bg-white text-black font-bold py-3 px-6 rounded-lg hover:bg-gray-200 cursor-pointer text-sm">
+                            {uploading ? 'Bezig met uploaden…' : (design.content?.mainImage ? 'Vervang foto' : 'Upload foto')}
+                            <input type="file" accept="image/*" onChange={handleUpload} disabled={uploading} className="hidden" />
+                        </label>
+                        {design.content?.mainImage && (
+                            <>
+                                <button onClick={async () => {
+                                    try {
+                                        const canvas = await renderToCanvas({
+                                            platformId: design.platform_id,
+                                            formatId: design.format_id,
+                                            content: design.content,
+                                            style: design.style,
+                                        });
+                                        canvas.toBlob((blob) => {
+                                            const safeName = (design.content?.name || 'mockup').replace(/[^a-z0-9_-]/gi, '_');
+                                            saveAs(blob, `${safeName}.png`);
+                                        }, 'image/png');
+                                    } catch (e) { alert('Download mislukt: ' + e.message); }
+                                }}
+                                    className="bg-dark-700 hover:bg-dark-800 text-white border border-white/10 font-bold py-3 px-6 rounded-lg text-sm">
+                                    ⬇ Download PNG
+                                </button>
+                                <button onClick={async () => {
+                                    if (!confirm('Foto verwijderen? De mockup gaat terug naar de placeholder.')) return;
+                                    setUploading(true);
+                                    setError('');
+                                    try {
+                                        await sharePublicCall('share-set-image', { share_token: token, imageData: null });
+                                        const d = await sharePublicCall('share-get-design', { share_token: token });
+                                        setDesign(d);
+                                        setUploaded(false);
+                                    } catch (err) { setError(err.message); }
+                                    setUploading(false);
+                                }}
+                                    disabled={uploading}
+                                    className="bg-red-600/70 hover:bg-red-600 text-white font-bold py-3 px-6 rounded-lg text-sm disabled:opacity-50">
+                                    🗑 Verwijder foto
+                                </button>
+                            </>
+                        )}
+                    </div>
                 </div>
             );
         }
@@ -2024,6 +2074,17 @@ Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
             const [runData, setRunData] = useState(null); // { bulk_run_label, designs: [...] }
             const [error, setError] = useState('');
             const [uploadingId, setUploadingId] = useState(null);
+
+            // Body heeft default overflow-hidden voor de main app — in share-mode
+            // willen we wel kunnen scrollen door alle mockups.
+            useEffect(() => {
+                document.body.classList.remove('overflow-hidden', 'h-screen');
+                document.body.classList.add('min-h-screen');
+                return () => {
+                    document.body.classList.add('overflow-hidden', 'h-screen');
+                    document.body.classList.remove('min-h-screen');
+                };
+            }, []);
 
             const fetchRun = async () => {
                 try {
@@ -2098,21 +2159,53 @@ Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
                                             style={d.style}
                                         />
                                     </div>
-                                    <div className="flex items-center justify-between gap-2">
-                                        <div className="text-[10px] flex-1 min-w-0">
-                                            {d.awaiting_photo ? (
-                                                <span className="text-yellow-400">📷 wacht op foto</span>
-                                            ) : (
-                                                <span className="text-green-400">✓ foto geplaatst</span>
-                                            )}
-                                        </div>
+                                    <div className="text-[10px] mb-2">
+                                        {d.awaiting_photo ? (
+                                            <span className="text-yellow-400">📷 wacht op foto</span>
+                                        ) : (
+                                            <span className="text-green-400">✓ foto geplaatst</span>
+                                        )}
+                                    </div>
+                                    <div className="flex flex-wrap gap-1.5">
                                         <label className="bg-white text-black font-bold py-1.5 px-3 rounded text-[11px] hover:bg-gray-200 cursor-pointer whitespace-nowrap">
-                                            {isUploading ? '…' : (d.content?.mainImage ? 'Vervang' : 'Upload foto')}
+                                            {isUploading ? '…' : (d.content?.mainImage ? 'Vervang' : 'Upload')}
                                             <input type="file" accept="image/*"
                                                 onChange={(e) => handleUpload(d.id, e)}
                                                 disabled={isUploading}
                                                 className="hidden" />
                                         </label>
+                                        {d.content?.mainImage && (
+                                            <>
+                                                <button onClick={async () => {
+                                                    try {
+                                                        const canvas = await renderToCanvas({
+                                                            platformId: d.platform_id,
+                                                            formatId: d.format_id,
+                                                            content: d.content,
+                                                            style: d.style,
+                                                        });
+                                                        canvas.toBlob((blob) => {
+                                                            const safeName = (d.content?.name || 'mockup').replace(/[^a-z0-9_-]/gi, '_');
+                                                            saveAs(blob, `${safeName}.png`);
+                                                        }, 'image/png');
+                                                    } catch (e) { alert('Download mislukt: ' + e.message); }
+                                                }}
+                                                    className="bg-dark-700 hover:bg-dark-900 text-white border border-white/10 font-bold py-1.5 px-3 rounded text-[11px] whitespace-nowrap">⬇ PNG</button>
+                                                <button onClick={async () => {
+                                                    if (!confirm('Foto verwijderen?')) return;
+                                                    setUploadingId(d.id);
+                                                    try {
+                                                        await sharePublicCall('share-set-image-by-run', {
+                                                            share_token: token, design_id: d.id, imageData: null,
+                                                        });
+                                                        await fetchRun();
+                                                    } catch (err) { setError(err.message); }
+                                                    setUploadingId(null);
+                                                }}
+                                                    disabled={isUploading}
+                                                    className="bg-red-600/70 hover:bg-red-600 text-white font-bold py-1.5 px-3 rounded text-[11px] whitespace-nowrap disabled:opacity-50">🗑</button>
+                                            </>
+                                        )}
                                     </div>
                                 </div>
                             );
