@@ -1,0 +1,1967 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SocialFrame v3 — Bulk Mockup Tool</title>
+
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        body { font-family: 'Inter', sans-serif; }
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: #18181b; }
+        ::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 3px; }
+        input[type="range"]::-webkit-slider-runnable-track { background: #27272a; height: 4px; border-radius: 2px; }
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none; appearance: none; margin-top: -6px;
+            height: 16px; width: 16px; background: #3b82f6; border-radius: 50%;
+            cursor: pointer; box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.3);
+        }
+        .checkerboard {
+            background-color: #09090b;
+            background-image:
+                linear-gradient(45deg, #18181b 25%, transparent 25%),
+                linear-gradient(-45deg, #18181b 25%, transparent 25%),
+                linear-gradient(45deg, transparent 75%, #18181b 75%),
+                linear-gradient(-45deg, transparent 75%, #18181b 75%);
+            background-size: 20px 20px;
+        }
+        input[type="file"] { display: none; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+        .animate-fade-in { animation: fadeIn 0.3s ease-out forwards; }
+        .dropzone-active { box-shadow: inset 0 0 0 3px #3b82f6; }
+    </style>
+
+    <script>
+        tailwind.config = {
+            theme: { extend: { colors: { dark: { 900: '#09090b', 800: '#18181b', 700: '#27272a' } } } }
+        }
+    </script>
+</head>
+<body class="bg-dark-900 text-white h-screen overflow-hidden">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo, useCallback } = React;
+
+        // ============== CONSTANTS ==============
+        const DEFAULT_IMG_ASPECT = 1350 / 1080;
+
+        const FORMATS = {
+            'feed-4-5':   { name: 'Feed Portrait (4:5)',     imgAspect: 1350 / 1080 },
+            'feed-1-1':   { name: 'Feed Square (1:1)',       imgAspect: 1 },
+            'feed-1-91':  { name: 'Feed Landscape (1.91:1)', imgAspect: 1 / 1.91 },
+            'story-9-16': { name: 'Story / Reel (9:16)',     imgAspect: 16 / 9, isStory: true },
+        };
+
+        const PLATFORMS = {
+            linkedin: {
+                name: 'LinkedIn',
+                sponsorLabel: 'Gesponsord',
+                avatarShape: 'square',
+                layout: 'feed-cta',
+                buttonText: 'Lees meer',
+                buttonStyle: { bg: 'transparent', text: '#0077b5', border: '#0077b5' },
+            },
+            meta: {
+                name: 'Facebook',
+                sponsorLabel: 'Gesponsord',
+                avatarShape: 'circle',
+                layout: 'feed-cta',
+                buttonText: 'Meer informatie',
+                buttonStyle: { bg: '#e4e4e7', text: '#000', border: 'transparent' },
+            },
+            instagram: {
+                name: 'Instagram',
+                sponsorLabel: 'Gesponsord',
+                avatarShape: 'circle',
+                layout: 'feed-icons',
+                buttonText: 'Meer bekijken',
+                buttonStyle: { bg: '#0095f6', text: '#fff', border: 'transparent' },
+            },
+            tiktok: {
+                name: 'TikTok',
+                sponsorLabel: 'Gesponsord',
+                avatarShape: 'circle',
+                layout: 'story',
+                buttonText: 'Meer informatie',
+                buttonStyle: { bg: '#fff', text: '#000', border: 'transparent' },
+            },
+        };
+
+        // ============== CLOUD API ==============
+        // Project: lljnruyhireravkxtxrz.supabase.co
+        // Publishable key is safe to ship to clients — anyone calling the
+        // Edge Function still has to provide the team password (server-side
+        // env var) to read or write data.
+        const SUPABASE_URL = 'https://lljnruyhireravkxtxrz.supabase.co';
+        const SUPABASE_ANON_KEY = 'sb_publishable_bgQYbx8tUxVwKTHlUQmsiA__5lCQymj';
+        const FUNCTION_URL = `${SUPABASE_URL}/functions/v1/data`;
+        const PW_STORAGE_KEY = 'socialframe_pw_v3';
+        const DESIGNS_STORE = 'designs_v3';
+        const BRANDS_STORE = 'brand_kits';
+
+        const apiCall = async (resource, action, payload = null) => {
+            const password = localStorage.getItem(PW_STORAGE_KEY);
+            if (!password) throw new Error('NO_PASSWORD');
+
+            const res = await fetch(FUNCTION_URL, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+                    'apikey': SUPABASE_ANON_KEY,
+                    'x-password': password,
+                },
+                body: JSON.stringify({ resource, action, payload }),
+            });
+            if (res.status === 401) {
+                localStorage.removeItem(PW_STORAGE_KEY);
+                throw new Error('WRONG_PASSWORD');
+            }
+            if (!res.ok) {
+                const txt = await res.text().catch(() => '');
+                throw new Error(`API_ERROR_${res.status}: ${txt}`);
+            }
+            return await res.json();
+        };
+
+        // DB ↔ JS naming adapters (Postgres uses snake_case, JS uses camelCase)
+        const toDbDesign = (d) => ({
+            id: String(d.id),
+            platform_id: d.platformId,
+            format_id: d.formatId,
+            content: d.content,
+            style: d.style,
+            date: d.date,
+        });
+        const fromDbDesign = (d) => ({
+            id: d.id,
+            platformId: d.platform_id,
+            formatId: d.format_id,
+            content: d.content,
+            style: d.style,
+            date: d.date,
+        });
+        const toDbKit = (k) => ({
+            id: String(k.id),
+            name: k.name,
+            sender_name: k.senderName,
+            url: k.url,
+            verified: !!k.verified,
+            avatar: k.avatar,
+        });
+        const fromDbKit = (k) => ({
+            id: k.id,
+            name: k.name,
+            senderName: k.sender_name,
+            url: k.url,
+            verified: !!k.verified,
+            avatar: k.avatar,
+            date: k.created_at ? new Date(k.created_at).toLocaleDateString('nl-NL') : '',
+        });
+
+        // ============== HELPERS ==============
+        const wrapText = (ctx, text, maxWidth) => {
+            const paragraphs = String(text ?? '').split('\n');
+            const lines = [];
+            for (const para of paragraphs) {
+                if (para === '') { lines.push(''); continue; }
+                const words = para.split(' ');
+                let line = words[0] ?? '';
+                for (let i = 1; i < words.length; i++) {
+                    const w = words[i];
+                    if (ctx.measureText(line + ' ' + w).width < maxWidth) line += ' ' + w;
+                    else { lines.push(line); line = w; }
+                }
+                lines.push(line);
+            }
+            return lines;
+        };
+
+        const loadImg = (src) => new Promise((res, rej) => {
+            const i = new Image();
+            i.onload = () => res(i);
+            i.onerror = rej;
+            i.src = src;
+        });
+
+        const truncateToWidth = (ctx, text, maxW, fontStr) => {
+            ctx.font = fontStr;
+            if (ctx.measureText(text).width <= maxW) return text;
+            let t = text;
+            while (t.length > 0 && ctx.measureText(t + '…').width > maxW) t = t.slice(0, -1);
+            return t + '…';
+        };
+
+        // Resize images larger than 1500px on the long side so the JSON
+        // payload stays under Supabase's Edge Function body limit (~6 MB).
+        // Original format is preserved (PNG keeps transparency for logos).
+        const fileToImageData = (file) => new Promise((res, rej) => {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const img = new Image();
+                img.onload = () => {
+                    const MAX = 1500;
+                    let w = img.naturalWidth, h = img.naturalHeight;
+                    const longest = Math.max(w, h);
+                    if (longest <= MAX) {
+                        return res({ src: e.target.result, width: w, height: h });
+                    }
+                    const scale = MAX / longest;
+                    w = Math.round(w * scale);
+                    h = Math.round(h * scale);
+                    const c = document.createElement('canvas');
+                    c.width = w; c.height = h;
+                    const cx = c.getContext('2d');
+                    cx.drawImage(img, 0, 0, w, h);
+                    const isJpeg = file.type === 'image/jpeg' || file.type === 'image/jpg';
+                    const mime = isJpeg ? 'image/jpeg' : 'image/png';
+                    const compressed = isJpeg ? c.toDataURL(mime, 0.85) : c.toDataURL(mime);
+                    res({ src: compressed, width: w, height: h });
+                };
+                img.onerror = rej;
+                img.src = e.target.result;
+            };
+            reader.onerror = rej;
+            reader.readAsDataURL(file);
+        });
+
+        // ============== RICH PLACEHOLDER (v3) ==============
+        // Wanneer er geen foto is geupload maar wél een briefing-tekst voor de
+        // vormgever, render een zwart vlak met:
+        //   - Bovenin klein lichtgrijs cursief: image-description ("Stockphoto: ...")
+        //   - Centraal groot wit: image-text (de quote/zin die op het beeld moet)
+        // Returns true als rich placeholder is getekend, false als beide leeg.
+        const drawRichPlaceholder = (ctx, x, y, w, h, description, text, scale) => {
+            const hasDesc = description && description.trim().length > 0;
+            const hasText = text && text.trim().length > 0;
+            if (!hasDesc && !hasText) return false;
+
+            // Zwart vlak
+            ctx.save();
+            ctx.fillStyle = '#0a0a0a';
+            ctx.fillRect(x, y, w, h);
+
+            const padX = Math.max(16 * scale, w * 0.08);
+
+            // Image-description bovenin (klein, lichtgrijs cursief)
+            if (hasDesc) {
+                ctx.fillStyle = '#9ca3af';
+                ctx.font = `italic 400 ${11 * scale}px "Inter", sans-serif`;
+                ctx.textAlign = 'left';
+                ctx.textBaseline = 'top';
+                const descLines = wrapText(ctx, description.trim(), w - padX * 2);
+                let dy = y + 16 * scale;
+                for (const ln of descLines.slice(0, 3)) {
+                    ctx.fillText(ln, x + padX, dy);
+                    dy += 15 * scale;
+                }
+            }
+
+            // Image-text gecentreerd (groter, wit)
+            if (hasText) {
+                ctx.fillStyle = '#ffffff';
+                // Auto-size font: hoe minder tekst, hoe groter
+                const charCount = text.trim().length;
+                let fontSize = 22;
+                if (charCount > 60) fontSize = 18;
+                if (charCount > 120) fontSize = 15;
+                if (charCount > 200) fontSize = 13;
+                ctx.font = `600 ${fontSize * scale}px "Inter", sans-serif`;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                const lineHeight = fontSize * 1.35 * scale;
+                const textLines = wrapText(ctx, text.trim(), w - padX * 2);
+                const totalH = textLines.length * lineHeight;
+                let ty = y + h / 2 - totalH / 2 + lineHeight / 2;
+                for (const ln of textLines) {
+                    ctx.fillText(ln, x + w / 2, ty);
+                    ty += lineHeight;
+                }
+            }
+
+            ctx.restore();
+            return true;
+        };
+
+        // ============== CANVAS ICON DRAWING ==============
+        const drawHeart = (ctx, cx, cy, r, color, filled = true) => {
+            ctx.save();
+            ctx.fillStyle = filled ? color : 'transparent';
+            ctx.strokeStyle = color;
+            ctx.lineWidth = r * 0.18;
+            const tx = cx, ty = cy - r * 0.3;
+            ctx.beginPath();
+            ctx.moveTo(tx, ty + r * 0.4);
+            ctx.bezierCurveTo(tx, ty, tx - r, ty, tx - r, ty + r * 0.6);
+            ctx.bezierCurveTo(tx - r, ty + r, tx, ty + r * 1.5, tx, ty + r * 1.7);
+            ctx.bezierCurveTo(tx, ty + r * 1.5, tx + r, ty + r, tx + r, ty + r * 0.6);
+            ctx.bezierCurveTo(tx + r, ty, tx, ty, tx, ty + r * 0.4);
+            ctx.closePath();
+            if (filled) ctx.fill(); else ctx.stroke();
+            ctx.restore();
+        };
+
+        const drawComment = (ctx, cx, cy, r, color) => {
+            ctx.save();
+            ctx.strokeStyle = color;
+            ctx.lineWidth = r * 0.18;
+            ctx.beginPath();
+            ctx.arc(cx, cy, r, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.fillStyle = color;
+            ctx.beginPath();
+            ctx.moveTo(cx - r * 0.3, cy + r * 0.4);
+            ctx.lineTo(cx - r * 0.5, cy + r * 1.3);
+            ctx.lineTo(cx + r * 0.4, cy + r * 0.7);
+            ctx.closePath();
+            ctx.fill();
+            ctx.restore();
+        };
+
+        const drawShare = (ctx, cx, cy, r, color) => {
+            ctx.save();
+            ctx.strokeStyle = color;
+            ctx.lineWidth = r * 0.18;
+            ctx.lineJoin = 'round';
+            ctx.beginPath();
+            ctx.moveTo(cx + r, cy - r);
+            ctx.lineTo(cx - r, cy);
+            ctx.lineTo(cx + r * 0.1, cy + r * 0.3);
+            ctx.lineTo(cx + r, cy - r);
+            ctx.closePath();
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.moveTo(cx + r * 0.1, cy + r * 0.3);
+            ctx.lineTo(cx + r * 0.3, cy + r);
+            ctx.stroke();
+            ctx.restore();
+        };
+
+        const drawBookmark = (ctx, cx, cy, r, color) => {
+            ctx.save();
+            ctx.strokeStyle = color;
+            ctx.lineWidth = r * 0.18;
+            ctx.lineJoin = 'round';
+            ctx.beginPath();
+            ctx.moveTo(cx - r * 0.7, cy - r);
+            ctx.lineTo(cx - r * 0.7, cy + r);
+            ctx.lineTo(cx, cy + r * 0.4);
+            ctx.lineTo(cx + r * 0.7, cy + r);
+            ctx.lineTo(cx + r * 0.7, cy - r);
+            ctx.closePath();
+            ctx.stroke();
+            ctx.restore();
+        };
+
+        const drawVerified = (ctx, x, y, r) => {
+            ctx.save();
+            ctx.fillStyle = '#1d9bf0';
+            ctx.beginPath();
+            ctx.arc(x + r, y + r, r, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.strokeStyle = '#fff';
+            ctx.lineWidth = r * 0.32;
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+            ctx.beginPath();
+            ctx.moveTo(x + r * 0.55, y + r * 1.0);
+            ctx.lineTo(x + r * 0.9, y + r * 1.35);
+            ctx.lineTo(x + r * 1.45, y + r * 0.7);
+            ctx.stroke();
+            ctx.restore();
+        };
+
+        // ============== ICONS (REACT) ==============
+        const Icons = {
+            Download: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>,
+            User: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>,
+            Image: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>,
+            Save: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>,
+            Trash: () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>,
+            Heart: ({ size = 22, fill = 'none' }) => <svg width={size} height={size} viewBox="0 0 24 24" fill={fill} stroke="currentColor" strokeWidth="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>,
+            Comment: ({ size = 22 }) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>,
+            Share: ({ size = 22 }) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round"><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>,
+            Bookmark: ({ size = 22 }) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>,
+            Verified: () => <svg width="14" height="14" viewBox="0 0 24 24" fill="#1d9bf0"><path d="M22.25 12c0-1.43-.88-2.67-2.19-3.34.46-1.39.2-2.9-.81-3.91s-2.52-1.27-3.91-.81c-.66-1.31-1.91-2.19-3.34-2.19s-2.67.88-3.33 2.19c-1.4-.46-2.91-.2-3.92.81s-1.26 2.52-.8 3.91c-1.31.67-2.2 1.91-2.2 3.34s.89 2.67 2.2 3.34c-.46 1.39-.21 2.9.8 3.91s2.52 1.26 3.91.81c.67 1.31 1.91 2.19 3.34 2.19s2.68-.88 3.34-2.19c1.39.45 2.9.2 3.91-.81s1.27-2.52.81-3.91c1.31-.67 2.19-1.91 2.19-3.34zm-11.71 4.2L6.8 12.46l1.41-1.42 2.26 2.26 4.8-5.23 1.47 1.36-6.2 6.77z"/></svg>,
+            Plus: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="12" x2="12" y1="5" y2="19"/><line x1="5" x2="19" y1="12" y2="12"/></svg>,
+            Briefcase: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="2" y="7" width="20" height="14" rx="2" ry="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>,
+            Package: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="16.5" x2="7.5" y1="9.4" y2="4.21"/><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" x2="12" y1="22.08" y2="12"/></svg>,
+        };
+
+        // ============== LAYOUT METRICS ==============
+        // Returns { phoneHeight, imgHeight } for given layout config
+        function computeMetrics({ platform, format, content, phoneW, sliderH }) {
+            if (platform.layout === 'story') {
+                return { phoneHeight: sliderH, imgHeight: sliderH };
+            }
+
+            const imgAspect = content.mainImage
+                ? content.mainImage.height / content.mainImage.width
+                : format.imgAspect;
+            const imgH = phoneW * imgAspect;
+
+            const measureCanvas = document.createElement('canvas');
+            const mctx = measureCanvas.getContext('2d');
+            const safePadX = 20, lineHeight = 20, fontSize = 14;
+
+            if (platform.layout === 'feed-cta') {
+                const topSpace = 50, headerOffset = 70, gap = 10, footerH = 80, buffer = 4;
+                mctx.font = `400 ${fontSize}px "Inter", sans-serif`;
+                const lines = wrapText(mctx, content.text, phoneW - safePadX * 2);
+                const textH = lines.length * lineHeight;
+                const contentH = topSpace + headerOffset + textH + gap + imgH + footerH + buffer;
+                return { phoneHeight: Math.max(sliderH, Math.ceil(contentH)), imgHeight: imgH };
+            }
+
+            if (platform.layout === 'feed-icons') {
+                const topSpace = 50, headerOffset = 60, iconRowH = 50, likesH = 22, gap = 6, buffer = 12;
+                mctx.font = `400 12px "Inter", sans-serif`;
+                const captionLines = wrapText(mctx, content.name + ' ' + content.text, phoneW - safePadX * 2);
+                const captionH = captionLines.length * 18;
+                const contentH = topSpace + headerOffset + imgH + iconRowH + likesH + gap + captionH + buffer;
+                return { phoneHeight: Math.max(sliderH, Math.ceil(contentH)), imgHeight: imgH };
+            }
+
+            return { phoneHeight: sliderH, imgHeight: imgH };
+        }
+
+        // ============== CANVAS RENDERERS ==============
+        async function renderFeedCTA(ctx, p) {
+            const { scale, phoneX, phoneY, phoneW, safeX, safeW, content, platform, darkMode, imgH, fontBold, fontReg } = p;
+            let currentY = p.currentY;
+
+            const headerOffset = 70 * scale;
+            const avatarSize = 40 * scale;
+            const mainImg = content.mainImage ? await loadImg(content.mainImage.src) : null;
+            const avatarImg = content.avatar ? await loadImg(content.avatar.src) : null;
+
+            // Avatar
+            ctx.save();
+            ctx.beginPath();
+            if (platform.avatarShape === 'circle') {
+                ctx.arc(safeX + avatarSize / 2, currentY + avatarSize / 2, avatarSize / 2, 0, Math.PI * 2);
+            } else {
+                const r = 8 * scale;
+                if (ctx.roundRect) ctx.roundRect(safeX, currentY, avatarSize, avatarSize, r);
+                else ctx.rect(safeX, currentY, avatarSize, avatarSize);
+            }
+            ctx.closePath();
+            ctx.clip();
+            if (avatarImg) ctx.drawImage(avatarImg, safeX, currentY, avatarSize, avatarSize);
+            else { ctx.fillStyle = '#ccc'; ctx.fillRect(safeX, currentY, avatarSize, avatarSize); }
+            ctx.restore();
+
+            // Name + verified
+            ctx.fillStyle = darkMode ? '#fff' : '#000';
+            ctx.font = fontBold(14);
+            ctx.textAlign = 'left';
+            const nameX = safeX + avatarSize + 10 * scale;
+            ctx.fillText(content.name, nameX, currentY + 15 * scale);
+            if (content.verified) {
+                const nameW = ctx.measureText(content.name).width;
+                drawVerified(ctx, nameX + nameW + 4 * scale, currentY + 4 * scale, 7 * scale);
+            }
+
+            ctx.fillStyle = '#a1a1aa';
+            ctx.font = fontReg(11);
+            ctx.fillText(`${platform.sponsorLabel} • 2u`, nameX, currentY + 32 * scale);
+
+            ctx.fillStyle = darkMode ? '#fff' : '#000';
+            ctx.font = fontBold(14);
+            ctx.fillText('...', phoneX + phoneW - 30 * scale, currentY + 20 * scale);
+
+            currentY += headerOffset;
+
+            // Post text
+            ctx.fillStyle = darkMode ? '#fff' : '#18181b';
+            ctx.font = fontReg(14);
+            const lineHeight = 20 * scale;
+            const textLines = wrapText(ctx, content.text, safeW);
+            for (const ln of textLines) {
+                ctx.fillText(ln, safeX, currentY);
+                currentY += lineHeight;
+            }
+            currentY += 10 * scale;
+
+            // Image (of rich placeholder met briefing-tekst)
+            if (mainImg) {
+                ctx.drawImage(mainImg, phoneX, currentY, phoneW, imgH);
+            } else if (!drawRichPlaceholder(ctx, phoneX, currentY, phoneW, imgH, content.imageDescription, content.imageText, scale)) {
+                ctx.fillStyle = '#27272a';
+                ctx.fillRect(phoneX, currentY, phoneW, imgH);
+            }
+            currentY += imgH;
+
+            // Footer block
+            const footerH = 80 * scale;
+            ctx.fillStyle = darkMode ? '#27272a' : '#f4f4f5';
+            ctx.fillRect(phoneX, currentY, phoneW, footerH);
+
+            // Button (auto-sized to text)
+            ctx.font = fontBold(12);
+            const btnPadX = 12 * scale;
+            const btnTextW = ctx.measureText(content.buttonText).width;
+            const btnW = btnTextW + btnPadX * 2;
+            const btnH = 32 * scale;
+            const btnX = phoneX + phoneW - 20 * scale - btnW;
+            const btnY = currentY + (footerH - btnH) / 2;
+
+            const textMaxW = btnX - safeX - 12 * scale;
+
+            // Headline + URL with truncation
+            ctx.fillStyle = darkMode ? '#fff' : '#000';
+            ctx.textAlign = 'left';
+            ctx.fillText(truncateToWidth(ctx, content.headline, textMaxW, fontBold(13)), safeX, currentY + 30 * scale);
+            ctx.fillStyle = '#71717a';
+            ctx.fillText(truncateToWidth(ctx, content.url, textMaxW, fontReg(11)), safeX, currentY + 50 * scale);
+
+            // Button background
+            const bs = platform.buttonStyle;
+            if (bs.bg !== 'transparent') {
+                ctx.fillStyle = bs.bg;
+                ctx.beginPath();
+                if (ctx.roundRect) ctx.roundRect(btnX, btnY, btnW, btnH, 4 * scale);
+                else ctx.rect(btnX, btnY, btnW, btnH);
+                ctx.fill();
+            }
+            if (bs.border !== 'transparent') {
+                ctx.strokeStyle = bs.border;
+                ctx.lineWidth = 1.5 * scale;
+                ctx.beginPath();
+                if (ctx.roundRect) ctx.roundRect(btnX, btnY, btnW, btnH, 4 * scale);
+                else ctx.rect(btnX, btnY, btnW, btnH);
+                ctx.stroke();
+            }
+
+            ctx.fillStyle = bs.text;
+            ctx.font = fontBold(12);
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(content.buttonText, btnX + btnW / 2, btnY + btnH / 2);
+            ctx.textBaseline = 'alphabetic';
+        }
+
+        async function renderFeedIcons(ctx, p) {
+            const { scale, phoneX, phoneY, phoneW, safeX, safeW, content, platform, darkMode, imgH, fontBold, fontReg } = p;
+            let currentY = p.currentY;
+
+            const headerOffset = 60 * scale;
+            const avatarSize = 36 * scale;
+            const mainImg = content.mainImage ? await loadImg(content.mainImage.src) : null;
+            const avatarImg = content.avatar ? await loadImg(content.avatar.src) : null;
+
+            // Header avatar
+            ctx.save();
+            ctx.beginPath();
+            ctx.arc(safeX + avatarSize / 2, currentY + avatarSize / 2, avatarSize / 2, 0, Math.PI * 2);
+            ctx.closePath();
+            ctx.clip();
+            if (avatarImg) ctx.drawImage(avatarImg, safeX, currentY, avatarSize, avatarSize);
+            else { ctx.fillStyle = '#ccc'; ctx.fillRect(safeX, currentY, avatarSize, avatarSize); }
+            ctx.restore();
+
+            // Name + verified
+            ctx.fillStyle = darkMode ? '#fff' : '#000';
+            ctx.font = fontBold(13);
+            ctx.textAlign = 'left';
+            const nameX = safeX + avatarSize + 10 * scale;
+            ctx.fillText(content.name, nameX, currentY + 14 * scale);
+            if (content.verified) {
+                const nameW = ctx.measureText(content.name).width;
+                drawVerified(ctx, nameX + nameW + 4 * scale, currentY + 3 * scale, 6 * scale);
+            }
+
+            ctx.fillStyle = '#a1a1aa';
+            ctx.font = fontReg(10);
+            ctx.fillText(platform.sponsorLabel, nameX, currentY + 28 * scale);
+
+            ctx.fillStyle = darkMode ? '#fff' : '#000';
+            ctx.font = fontBold(14);
+            ctx.fillText('...', phoneX + phoneW - 30 * scale, currentY + 18 * scale);
+
+            currentY += headerOffset;
+
+            // Image (full width, height per format), of rich placeholder
+            if (mainImg) {
+                ctx.drawImage(mainImg, phoneX, currentY, phoneW, imgH);
+            } else if (!drawRichPlaceholder(ctx, phoneX, currentY, phoneW, imgH, content.imageDescription, content.imageText, scale)) {
+                ctx.fillStyle = '#27272a';
+                ctx.fillRect(phoneX, currentY, phoneW, imgH);
+            }
+            currentY += imgH;
+
+            // Icon row
+            const iconRowH = 50 * scale;
+            const iconY = currentY + iconRowH / 2;
+            const iconColor = darkMode ? '#fff' : '#000';
+            const iconR = 11 * scale;
+
+            drawHeart(ctx, safeX + iconR, iconY, iconR, iconColor, false);
+            drawComment(ctx, safeX + iconR + 30 * scale, iconY, iconR, iconColor);
+            drawShare(ctx, safeX + iconR + 60 * scale, iconY, iconR, iconColor);
+            drawBookmark(ctx, phoneX + phoneW - 22 * scale, iconY, iconR, iconColor);
+
+            currentY += iconRowH;
+
+            // Likes count
+            ctx.fillStyle = darkMode ? '#fff' : '#000';
+            ctx.font = fontBold(12);
+            ctx.textAlign = 'left';
+            ctx.fillText(`${(content.likes ?? 0).toLocaleString('nl-NL')} vind-ik-leuks`, safeX, currentY + 8 * scale);
+            currentY += 22 * scale;
+
+            // Caption (name bold + text)
+            ctx.font = fontReg(12);
+            const capLineH = 18 * scale;
+
+            // First line: name bold + text continuation
+            ctx.font = fontBold(12);
+            const nameWidth = ctx.measureText(content.name).width;
+            ctx.fillStyle = darkMode ? '#fff' : '#000';
+            ctx.fillText(content.name, safeX, currentY);
+            const remainingX = safeX + nameWidth + (4 * scale);
+            const remainingW = phoneW - 40 * scale - nameWidth - (4 * scale);
+
+            ctx.font = fontReg(12);
+            // Wrap remaining text on first line + subsequent full-width lines
+            const words = content.text.split(' ');
+            let firstLine = '';
+            let i = 0;
+            for (; i < words.length; i++) {
+                const test = firstLine ? firstLine + ' ' + words[i] : words[i];
+                if (ctx.measureText(test).width > remainingW) break;
+                firstLine = test;
+            }
+            ctx.fillText(firstLine, remainingX, currentY);
+            currentY += capLineH;
+
+            // Remaining words wrap to safeW
+            if (i < words.length) {
+                const rest = words.slice(i).join(' ');
+                const restLines = wrapText(ctx, rest, safeW);
+                for (const ln of restLines) {
+                    ctx.fillText(ln, safeX, currentY);
+                    currentY += capLineH;
+                }
+            }
+
+            // "Bekijk alle X reacties" (if any)
+            if ((content.comments ?? 0) > 0) {
+                currentY += 2 * scale;
+                ctx.fillStyle = '#71717a';
+                ctx.font = fontReg(11);
+                ctx.fillText(`Bekijk alle ${content.comments} reacties`, safeX, currentY);
+            }
+        }
+
+        async function renderStory(ctx, p) {
+            const { scale, phoneX, phoneY, phoneW, phoneH, safeX, content, platform, fontBold, fontReg } = p;
+            const mainImg = content.mainImage ? await loadImg(content.mainImage.src) : null;
+            const avatarImg = content.avatar ? await loadImg(content.avatar.src) : null;
+
+            if (mainImg) {
+                const ratio = mainImg.width / mainImg.height;
+                const targetRatio = phoneW / phoneH;
+                let sw, sh, sx, sy;
+                if (ratio > targetRatio) { sh = mainImg.height; sw = sh * targetRatio; sy = 0; sx = (mainImg.width - sw) / 2; }
+                else { sw = mainImg.width; sh = sw / targetRatio; sx = 0; sy = (mainImg.height - sh) / 2; }
+                ctx.drawImage(mainImg, sx, sy, sw, sh, phoneX, phoneY, phoneW, phoneH);
+            } else if (!drawRichPlaceholder(ctx, phoneX, phoneY, phoneW, phoneH, content.imageDescription, content.imageText, scale)) {
+                ctx.fillStyle = '#27272a';
+                ctx.fillRect(phoneX, phoneY, phoneW, phoneH);
+            }
+
+            // Bottom gradient overlay
+            const grd = ctx.createLinearGradient(0, phoneY + phoneH / 2, 0, phoneY + phoneH);
+            grd.addColorStop(0, 'transparent');
+            grd.addColorStop(1, 'rgba(0,0,0,0.8)');
+            ctx.fillStyle = grd;
+            ctx.fillRect(phoneX, phoneY + phoneH / 2, phoneW, phoneH / 2);
+
+            // Top: avatar + name
+            const avatarSize = 32 * scale;
+            const topY = phoneY + 50 * scale;
+
+            ctx.save();
+            ctx.beginPath();
+            ctx.arc(safeX + avatarSize / 2, topY + avatarSize / 2, avatarSize / 2, 0, Math.PI * 2);
+            ctx.clip();
+            if (avatarImg) ctx.drawImage(avatarImg, safeX, topY, avatarSize, avatarSize);
+            else { ctx.fillStyle = '#ccc'; ctx.fillRect(safeX, topY, avatarSize, avatarSize); }
+            ctx.restore();
+
+            ctx.fillStyle = '#fff';
+            ctx.font = fontBold(13);
+            ctx.textAlign = 'left';
+            const nameX = safeX + avatarSize + 10 * scale;
+            ctx.fillText(content.name, nameX, topY + 20 * scale);
+            if (content.verified) {
+                const nameW = ctx.measureText(content.name).width;
+                drawVerified(ctx, nameX + nameW + 4 * scale, topY + 9 * scale, 6 * scale);
+            }
+            ctx.font = fontReg(11);
+            ctx.fillStyle = 'rgba(255,255,255,0.85)';
+            ctx.fillText(platform.sponsorLabel, nameX, topY + 36 * scale);
+
+            // Side icons
+            const iconX = phoneX + phoneW - 30 * scale;
+            const iconYStart = phoneY + phoneH - 160 * scale;
+            const iconGap = 50 * scale;
+            const iconR = 12 * scale;
+
+            drawHeart(ctx, iconX, iconYStart, iconR, '#fff', false);
+            ctx.fillStyle = '#fff';
+            ctx.font = fontReg(11);
+            ctx.textAlign = 'center';
+            ctx.fillText((content.likes ?? 0).toLocaleString('nl-NL'), iconX, iconYStart + 22 * scale);
+
+            drawComment(ctx, iconX, iconYStart + iconGap, iconR, '#fff');
+            ctx.fillText((content.comments ?? 0).toString(), iconX, iconYStart + iconGap + 22 * scale);
+
+            drawShare(ctx, iconX, iconYStart + iconGap * 2, iconR, '#fff');
+            ctx.fillText((content.shares ?? 0).toString(), iconX, iconYStart + iconGap * 2 + 22 * scale);
+
+            // CTA pill at the bottom
+            const ctaW = phoneW - 40 * scale;
+            const ctaH = 36 * scale;
+            const ctaX = phoneX + 20 * scale;
+            const ctaY = phoneY + phoneH - 56 * scale;
+            const bs = platform.buttonStyle;
+            ctx.fillStyle = bs.bg === 'transparent' ? '#fff' : bs.bg;
+            ctx.beginPath();
+            if (ctx.roundRect) ctx.roundRect(ctaX, ctaY, ctaW, ctaH, 6 * scale);
+            else ctx.rect(ctaX, ctaY, ctaW, ctaH);
+            ctx.fill();
+
+            ctx.fillStyle = bs.text;
+            ctx.font = fontBold(13);
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(content.buttonText, ctaX + ctaW / 2, ctaY + ctaH / 2);
+            ctx.textBaseline = 'alphabetic';
+        }
+
+        // ============== STANDALONE renderToCanvas ==============
+        // Pure function: same input → same canvas. Used voor zowel preview als download
+        // zodat WYSIWYG gegarandeerd is (eerder dreven preview en export uit elkaar).
+        async function renderToCanvas({ platformId, formatId, content, style, darkMode }) {
+            const usePlatform = PLATFORMS[platformId];
+            const useFormat = FORMATS[formatId];
+            const useDarkMode = darkMode ?? style.darkMode;
+
+            const scale = 2;
+            const phoneW_orig = style.phoneWidth;
+            const m = computeMetrics({
+                platform: usePlatform, format: useFormat, content,
+                phoneW: phoneW_orig, sliderH: style.phoneHeight,
+            });
+            const phoneH_orig = m.phoneHeight;
+            const imgH_orig = m.imgHeight;
+
+            const phoneW = phoneW_orig * scale;
+            const phoneH = phoneH_orig * scale;
+            const pad = style.padding * scale;
+            const canvasW = phoneW + pad * 2;
+            const canvasH = phoneH + pad * 2;
+
+            const canvas = document.createElement('canvas');
+            canvas.width = canvasW;
+            canvas.height = canvasH;
+            const ctx = canvas.getContext('2d');
+
+            if (style.bgType === 'solid') {
+                ctx.fillStyle = style.bgColor1;
+                ctx.fillRect(0, 0, canvasW, canvasH);
+            } else if (style.bgType === 'gradient') {
+                const grd = ctx.createLinearGradient(0, 0, canvasW, canvasH);
+                grd.addColorStop(0, style.bgColor1);
+                grd.addColorStop(1, style.bgColor2);
+                ctx.fillStyle = grd;
+                ctx.fillRect(0, 0, canvasW, canvasH);
+            } else {
+                ctx.clearRect(0, 0, canvasW, canvasH);
+            }
+
+            const phoneX = pad, phoneY = pad;
+            const radius = 40 * scale;
+
+            if (style.deviceFrame === 'shadow') {
+                ctx.shadowColor = 'rgba(0,0,0,0.3)';
+                ctx.shadowBlur = 40 * scale;
+                ctx.shadowOffsetY = 20 * scale;
+            }
+
+            ctx.fillStyle = useDarkMode ? '#000' : '#fff';
+            ctx.beginPath();
+            if (ctx.roundRect) ctx.roundRect(phoneX, phoneY, phoneW, phoneH, radius);
+            else ctx.rect(phoneX, phoneY, phoneW, phoneH);
+            ctx.fill();
+
+            ctx.shadowColor = 'transparent';
+            ctx.shadowBlur = 0;
+            ctx.shadowOffsetY = 0;
+
+            if (style.deviceFrame === 'outline') {
+                ctx.lineWidth = 1.5 * scale;
+                ctx.strokeStyle = '#d4d4d8';
+                ctx.stroke();
+            }
+
+            ctx.save();
+            ctx.beginPath();
+            if (ctx.roundRect) ctx.roundRect(phoneX, phoneY, phoneW, phoneH, radius);
+            else ctx.rect(phoneX, phoneY, phoneW, phoneH);
+            ctx.clip();
+
+            const fontBold = (sz) => `600 ${sz * scale}px "Inter", sans-serif`;
+            const fontReg = (sz) => `400 ${sz * scale}px "Inter", sans-serif`;
+
+            ctx.fillStyle = (usePlatform.layout === 'story' || useDarkMode) ? '#fff' : '#000';
+            ctx.font = fontBold(12);
+            ctx.fillText('12:00', phoneX + 30 * scale, phoneY + 30 * scale);
+
+            const safeX = phoneX + 20 * scale;
+            const safeW = phoneW - 40 * scale;
+            const currentY = phoneY + 50 * scale;
+
+            const renderArgs = {
+                scale, phoneX, phoneY, phoneW, phoneH, safeX, safeW, currentY,
+                content, style, platform: usePlatform, darkMode: useDarkMode,
+                imgH: imgH_orig * scale, fontBold, fontReg,
+            };
+
+            if (usePlatform.layout === 'feed-cta') await renderFeedCTA(ctx, renderArgs);
+            else if (usePlatform.layout === 'feed-icons') await renderFeedIcons(ctx, renderArgs);
+            else if (usePlatform.layout === 'story') await renderStory(ctx, renderArgs);
+
+            ctx.restore();
+
+            const notchW = 100 * scale, notchH = 25 * scale;
+            ctx.fillStyle = '#000';
+            ctx.beginPath();
+            if (ctx.roundRect) ctx.roundRect(phoneX + (phoneW - notchW) / 2, phoneY + 10 * scale, notchW, notchH, 12 * scale);
+            else ctx.rect(phoneX + (phoneW - notchW) / 2, phoneY + 10 * scale, notchW, notchH);
+            ctx.fill();
+
+            return canvas;
+        }
+
+        // ============== PREVIEW (canvas → image) ==============
+        // Re-rendert canvas op elke state-change; toont resultaat als <img>.
+        // Garandeert dat preview === export (geen drift mogelijk).
+        function CanvasPreview({ platformId, formatId, content, style }) {
+            const [src, setSrc] = useState(null);
+            useEffect(() => {
+                let cancelled = false;
+                (async () => {
+                    try {
+                        const canvas = await renderToCanvas({ platformId, formatId, content, style });
+                        if (cancelled) return;
+                        setSrc(canvas.toDataURL('image/png'));
+                    } catch (e) { console.error('Preview render error:', e); }
+                })();
+                return () => { cancelled = true; };
+            }, [platformId, formatId, content, style]);
+
+            if (!src) return <div className="text-gray-500 text-sm">Mockup wordt opgebouwd…</div>;
+            return <img src={src} className="max-w-full max-h-full" alt="Mockup preview" />;
+        }
+
+        // ============== PASSWORD GATE ==============
+        // ============== BULK PANEL (v3) ==============
+        // Genereer veel mockups uit een TSV-spreadsheet (geplakt vanuit Sheets/Claude).
+        //
+        // Twee modi:
+        //   - Simple: brand/platform/format/frame staan boven de TSV (1× ingesteld).
+        //     TSV-kolommen: naam, posttekst, headline, knop, url, image_filename,
+        //                    image_description, image_text
+        //   - Advanced: alle kolommen per rij (incl. brand/platform/format/frame).
+        //     TSV-kolommen: brand, platform, format, frame, naam, posttekst, headline,
+        //                    knop, url, image_filename, image_description, image_text
+        //
+        // image_filename matcht tegen files die in de drop-zone gesleept zijn.
+        // Als leeg + image_description/text: rich placeholder. Als leeg + niets:
+        // grijs vlak.
+
+        const BULK_HEADERS_SIMPLE = ['naam', 'posttekst', 'headline', 'knop', 'url', 'image_filename', 'image_description', 'image_text'];
+        const BULK_HEADERS_ADVANCED = ['brand', 'platform', 'format', 'frame', ...BULK_HEADERS_SIMPLE];
+
+        // Parse pasted TSV. Tolerant for extra/missing columns.
+        // Returns { rows: [{rowNum, data, errors[], warnings[]}], headerError? }
+        const parseTSV = (text, mode, simpleDefaults, brandKits) => {
+            if (!text || !text.trim()) return { rows: [], headerError: 'Geen TSV-data geplakt.' };
+
+            const lines = text.replace(/\r\n/g, '\n').split('\n').filter(l => l.trim().length > 0);
+            if (lines.length < 2) return { rows: [], headerError: 'TSV moet minstens een header-rij + 1 data-rij hebben.' };
+
+            const headerCells = lines[0].split('\t').map(c => c.trim().toLowerCase());
+            const expected = mode === 'simple' ? BULK_HEADERS_SIMPLE : BULK_HEADERS_ADVANCED;
+            const missing = expected.filter(h => !headerCells.includes(h));
+            // We staan ook toe dat sommige verplichte velden ontbreken (bv. headline) — die krijgen lege default.
+            // Maar als alle expected ontbreken, gaat het mis.
+            if (missing.length === expected.length) {
+                return { rows: [], headerError: `Headers herkend: [${headerCells.join(', ')}]. Verwacht: [${expected.join(', ')}].` };
+            }
+
+            const idx = (col) => headerCells.indexOf(col);
+
+            const lookupBrand = (name) => {
+                if (!name) return null;
+                const lc = name.trim().toLowerCase();
+                return brandKits.find(k => k.name?.toLowerCase() === lc || k.senderName?.toLowerCase() === lc);
+            };
+
+            const rows = [];
+            for (let i = 1; i < lines.length; i++) {
+                const cells = lines[i].split('\t');
+                const get = (col) => {
+                    const j = idx(col);
+                    return j >= 0 ? (cells[j] ?? '').trim() : '';
+                };
+                const errors = [];
+                const warnings = [];
+
+                let brand = null;
+                let platformId, formatId, frame;
+                if (mode === 'simple') {
+                    brand = simpleDefaults.brand;
+                    platformId = simpleDefaults.platformId;
+                    formatId = simpleDefaults.formatId;
+                    frame = simpleDefaults.frame;
+                } else {
+                    const brandName = get('brand');
+                    brand = lookupBrand(brandName);
+                    if (!brand) errors.push(`Brand '${brandName}' niet gevonden`);
+
+                    platformId = get('platform').toLowerCase();
+                    if (!PLATFORMS[platformId]) {
+                        warnings.push(`Platform '${platformId}' onbekend → 'linkedin'`);
+                        platformId = 'linkedin';
+                    }
+                    formatId = get('format').toLowerCase();
+                    if (!FORMATS[formatId]) {
+                        warnings.push(`Format '${formatId}' onbekend → 'feed-4-5'`);
+                        formatId = 'feed-4-5';
+                    }
+                    frame = get('frame').toLowerCase() || 'shadow';
+                    if (!['none', 'shadow', 'outline'].includes(frame)) {
+                        warnings.push(`Frame '${frame}' onbekend → 'shadow'`);
+                        frame = 'shadow';
+                    }
+                }
+
+                rows.push({
+                    rowNum: i,
+                    skip: false,
+                    brand,
+                    platformId,
+                    formatId,
+                    frame,
+                    fields: {
+                        naam: get('naam'),
+                        posttekst: get('posttekst'),
+                        headline: get('headline'),
+                        knop: get('knop'),
+                        url: get('url'),
+                        image_filename: get('image_filename'),
+                        image_description: get('image_description'),
+                        image_text: get('image_text'),
+                    },
+                    errors,
+                    warnings,
+                });
+            }
+
+            return { rows, headerError: null };
+        };
+
+        // Build a content+style object voor één bulk-rij, klaar voor renderToCanvas
+        const buildContentForRow = (row, bulkImages, sharedImage) => {
+            const f = row.fields;
+            const brand = row.brand;
+            // image-resolutie: filename match → use; anders: niets (laat rich placeholder of grijs vlak doen)
+            let mainImage = null;
+            const fname = (f.image_filename || '').trim();
+            if (fname && bulkImages[fname]) {
+                mainImage = bulkImages[fname];
+            } else if (!fname && sharedImage) {
+                // In simple-mode: gedeelde foto wordt overal gebruikt waar geen filename staat
+                mainImage = sharedImage;
+            }
+
+            const content = {
+                avatar: brand?.avatar || null,
+                mainImage,
+                name: f.naam || brand?.senderName || brand?.name || 'Brand',
+                text: f.posttekst || '',
+                headline: f.headline || '',
+                buttonText: f.knop || 'Lees meer',
+                url: f.url || brand?.url || '',
+                verified: !!brand?.verified,
+                likes: 124, comments: 12, shares: 4,
+                imageDescription: f.image_description || '',
+                imageText: f.image_text || '',
+            };
+            const style = {
+                bgColor1: '#ffffff',
+                bgColor2: '#f4f4f5',
+                bgType: 'solid',
+                padding: 40,
+                darkMode: false,
+                deviceFrame: row.frame || 'shadow',
+                phoneWidth: 360,
+                phoneHeight: 700,
+            };
+            return { content, style };
+        };
+
+        const buildClaudePrompt = (mode, simpleDefaults, brandKits) => {
+            const brandName = simpleDefaults.brand?.name || simpleDefaults.brand?.senderName || '<brand>';
+            if (mode === 'simple') {
+                return `Genereer 20 SocialFrame-mockup-varianten als TSV (tabs als scheidingsteken).
+
+Brand: ${brandName} | Platform: ${simpleDefaults.platformId} | Format: ${simpleDefaults.formatId}
+
+Headers (verplicht in deze volgorde, gescheiden door tabs):
+${BULK_HEADERS_SIMPLE.join('\\t')}
+
+Vul image_filename leeg, en voor elke rij:
+- image_description: korte briefing voor de vormgever ("Stockphoto: ...")
+- image_text: de zin/quote die in/op het beeld komt (1-2 regels, max 80 tekens)
+
+Variaties: telkens een andere headline-angle voor de campagne.
+Posttekst max 80 woorden, headline max 60 tekens, knop = "Lees meer".
+
+Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
+            }
+            const brandsList = brandKits.map(k => k.name || k.senderName).filter(Boolean).join(', ');
+            return `Genereer 20 SocialFrame-mockup-varianten als TSV (tabs als scheidingsteken).
+
+Headers (verplicht in deze volgorde, gescheiden door tabs):
+${BULK_HEADERS_ADVANCED.join('\\t')}
+
+Beschikbare brands: ${brandsList || '<vul handmatig>'}
+Beschikbare platforms: linkedin, meta, instagram, tiktok
+Beschikbare formats: feed-4-5, feed-1-1, feed-1-91, story-9-16
+Frame: shadow / outline / none
+
+Vul image_filename leeg of zet een filename die de gebruiker apart upload.
+image_description = briefing voor vormgever, image_text = tekst die op het beeld komt.
+
+Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
+        };
+
+        function BulkPanel({ brandKits, defaults, setDefaults, mode, setMode, onZipReady }) {
+            const [tsvText, setTsvText] = useState('');
+            const [parsed, setParsed] = useState({ rows: [], headerError: null });
+            const [bulkImages, setBulkImages] = useState({}); // {filename: imageData}
+            const [sharedImage, setSharedImage] = useState(null);
+            const [progress, setProgress] = useState(null);
+            const [hint, setHint] = useState('');
+
+            // Re-parse when text/mode/defaults/brands change
+            useEffect(() => {
+                if (!tsvText.trim()) { setParsed({ rows: [], headerError: null }); return; }
+                setParsed(parseTSV(tsvText, mode, defaults, brandKits));
+            }, [tsvText, mode, defaults, brandKits]);
+
+            const onDropImages = async (e) => {
+                e.preventDefault();
+                const files = Array.from(e.dataTransfer.files || []);
+                if (!files.length) return;
+                const updates = {};
+                for (const f of files) {
+                    if (!f.type.startsWith('image/')) continue;
+                    try {
+                        const data = await fileToImageData(f);
+                        updates[f.name] = data;
+                    } catch (err) { console.error('image load failed', f.name, err); }
+                }
+                setBulkImages(prev => ({ ...prev, ...updates }));
+            };
+
+            const onSharedImageUpload = async (e) => {
+                const file = e.target.files?.[0];
+                if (!file) return;
+                const data = await fileToImageData(file);
+                setSharedImage(data);
+                e.target.value = '';
+            };
+
+            const toggleSkip = (rowNum) => {
+                setParsed(prev => ({
+                    ...prev,
+                    rows: prev.rows.map(r => r.rowNum === rowNum ? { ...r, skip: !r.skip } : r),
+                }));
+            };
+
+            const copyClaudePrompt = async () => {
+                const prompt = buildClaudePrompt(mode, defaults, brandKits);
+                try {
+                    await navigator.clipboard.writeText(prompt);
+                    setHint('Prompt gekopieerd. Plak in Claude.');
+                    setTimeout(() => setHint(''), 3000);
+                } catch (e) {
+                    setHint('Kopiëren faalde — selecteer handmatig.');
+                }
+            };
+
+            const generateBulk = async () => {
+                const valid = parsed.rows.filter(r => !r.skip && r.errors.length === 0);
+                if (!valid.length) {
+                    alert('Geen geldige rijen om te genereren.');
+                    return;
+                }
+                setProgress({ done: 0, total: valid.length });
+                const zip = new JSZip();
+                const reportLines = [`SocialFrame v3 — bulk export`, `Modus: ${mode}`, `Totaal verwerkt: ${valid.length}`, ''];
+
+                for (let i = 0; i < valid.length; i++) {
+                    const row = valid[i];
+                    try {
+                        const { content, style } = buildContentForRow(row, bulkImages, sharedImage);
+                        const canvas = await renderToCanvas({
+                            platformId: row.platformId,
+                            formatId: row.formatId,
+                            content, style,
+                        });
+                        const blob = await new Promise(res => canvas.toBlob(res, 'image/png'));
+                        const safeName = (content.name || `row-${row.rowNum}`).replace(/[^a-z0-9_-]/gi, '_');
+                        const filename = `${String(i + 1).padStart(3, '0')}_${safeName}_${row.platformId}_${row.formatId}.png`;
+                        zip.file(filename, blob);
+                        reportLines.push(`OK   row ${row.rowNum} → ${filename}`);
+                        if (row.warnings.length) reportLines.push(`     warnings: ${row.warnings.join('; ')}`);
+                    } catch (err) {
+                        console.error('bulk render failed', row, err);
+                        reportLines.push(`FAIL row ${row.rowNum}: ${err.message || err}`);
+                    }
+                    setProgress({ done: i + 1, total: valid.length });
+                }
+
+                // Skipped rows
+                const skipped = parsed.rows.filter(r => r.skip || r.errors.length);
+                if (skipped.length) {
+                    reportLines.push('', '── overgeslagen ──');
+                    for (const r of skipped) {
+                        reportLines.push(`SKIP row ${r.rowNum}: ${r.skip ? '(handmatig)' : r.errors.join('; ')}`);
+                    }
+                }
+
+                zip.file('_report.txt', reportLines.join('\n'));
+                const zipBlob = await zip.generateAsync({ type: 'blob' });
+                saveAs(zipBlob, `socialframe_v3_bulk_${Date.now()}.zip`);
+                setProgress(null);
+                if (onZipReady) onZipReady();
+            };
+
+            const validCount = parsed.rows.filter(r => !r.skip && r.errors.length === 0).length;
+            const skipCount = parsed.rows.filter(r => r.skip || r.errors.length).length;
+
+            return (
+                <div className="p-4 space-y-4 animate-fade-in flex-grow overflow-y-auto">
+                    {/* Mode toggle */}
+                    <div>
+                        <label className="block text-[11px] text-gray-400 mb-1">Modus</label>
+                        <div className="grid grid-cols-2 gap-1 bg-dark-900 p-1 rounded-lg border border-white/5">
+                            {[['simple', 'Simple'], ['advanced', 'Advanced']].map(([id, label]) => (
+                                <button key={id} onClick={() => setMode(id)}
+                                    className={`py-1.5 text-xs font-medium rounded-md ${mode === id ? 'bg-dark-700 text-white shadow' : 'text-gray-500 hover:text-gray-300'}`}>
+                                    {label}
+                                </button>
+                            ))}
+                        </div>
+                        <p className="text-[10px] text-gray-500 mt-1">
+                            {mode === 'simple' ? 'Brand/platform/format hieronder · TSV bevat alleen tekstvariaties.' : 'Alle kolommen per rij in de TSV.'}
+                        </p>
+                    </div>
+
+                    {/* Simple-mode defaults */}
+                    {mode === 'simple' && (
+                        <div className="space-y-2 bg-dark-900 rounded-lg p-3 border border-white/5">
+                            <div>
+                                <label className="block text-[10px] text-gray-400 mb-1">Brand</label>
+                                <select value={defaults.brand?.id || ''}
+                                    onChange={e => {
+                                        const b = brandKits.find(k => String(k.id) === e.target.value) || null;
+                                        setDefaults(d => ({ ...d, brand: b }));
+                                    }}
+                                    className="w-full bg-dark-800 border border-gray-700 rounded px-2 py-2 text-sm">
+                                    <option value="">— kies brand —</option>
+                                    {brandKits.map(k => <option key={k.id} value={k.id}>{k.name || k.senderName}</option>)}
+                                </select>
+                            </div>
+                            <div className="grid grid-cols-2 gap-2">
+                                <div>
+                                    <label className="block text-[10px] text-gray-400 mb-1">Platform</label>
+                                    <select value={defaults.platformId} onChange={e => setDefaults(d => ({ ...d, platformId: e.target.value }))}
+                                        className="w-full bg-dark-800 border border-gray-700 rounded px-2 py-2 text-sm">
+                                        {Object.entries(PLATFORMS).map(([id, p]) => <option key={id} value={id}>{p.name}</option>)}
+                                    </select>
+                                </div>
+                                <div>
+                                    <label className="block text-[10px] text-gray-400 mb-1">Format</label>
+                                    <select value={defaults.formatId} onChange={e => setDefaults(d => ({ ...d, formatId: e.target.value }))}
+                                        className="w-full bg-dark-800 border border-gray-700 rounded px-2 py-2 text-sm">
+                                        {Object.entries(FORMATS).map(([id, f]) => <option key={id} value={id}>{f.name}</option>)}
+                                    </select>
+                                </div>
+                                <div>
+                                    <label className="block text-[10px] text-gray-400 mb-1">Frame</label>
+                                    <select value={defaults.frame} onChange={e => setDefaults(d => ({ ...d, frame: e.target.value }))}
+                                        className="w-full bg-dark-800 border border-gray-700 rounded px-2 py-2 text-sm">
+                                        <option value="shadow">Shadow</option>
+                                        <option value="outline">Outline</option>
+                                        <option value="none">None</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label className="block text-[10px] text-gray-400 mb-1">Gedeelde foto</label>
+                                    <label className="w-full block bg-dark-800 border border-dashed border-gray-700 rounded px-2 py-2 text-xs text-gray-400 cursor-pointer hover:border-blue-500 truncate">
+                                        {sharedImage ? `✓ ${sharedImage.width}×${sharedImage.height}` : 'klik om te uploaden'}
+                                        <input type="file" accept="image/*" onChange={onSharedImageUpload} />
+                                    </label>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Multi-image drop zone */}
+                    <div
+                        className="p-3 bg-dark-900 border border-dashed border-gray-700 rounded-lg text-xs text-gray-400 hover:border-blue-500 transition-colors"
+                        onDragOver={e => e.preventDefault()}
+                        onDrop={onDropImages}
+                    >
+                        <div className="font-bold text-gray-300">Foto-pool</div>
+                        <p className="mt-1">Sleep meerdere foto's hierheen. TSV-rijen verwijzen ernaar via <code className="text-blue-400">image_filename</code>.</p>
+                        {Object.keys(bulkImages).length > 0 && (
+                            <div className="mt-2 flex flex-wrap gap-1">
+                                {Object.keys(bulkImages).map(name => (
+                                    <span key={name} className="text-[10px] bg-dark-700 px-2 py-0.5 rounded text-gray-300">{name}</span>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Claude prompt button */}
+                    <div>
+                        <button onClick={copyClaudePrompt}
+                            className="w-full bg-purple-600 hover:bg-purple-500 text-white font-bold py-2 rounded-lg text-sm">
+                            📋 Kopieer Claude-prompt
+                        </button>
+                        {hint && <p className="text-[11px] text-green-400 mt-1">{hint}</p>}
+                    </div>
+
+                    {/* TSV textarea */}
+                    <div>
+                        <label className="block text-[11px] text-gray-400 mb-1">Plak TSV (uit Claude of Sheets)</label>
+                        <textarea rows="8" value={tsvText} onChange={e => setTsvText(e.target.value)}
+                            placeholder={(mode === 'simple' ? BULK_HEADERS_SIMPLE : BULK_HEADERS_ADVANCED).join('\t') + '\nrij1\trij1\t...\nrij2\trij2\t...'}
+                            className="w-full bg-dark-900 border border-gray-700 rounded px-2 py-2 text-[11px] font-mono resize-none" />
+                    </div>
+
+                    {/* Validatie / preview */}
+                    {parsed.headerError && (
+                        <div className="bg-red-900/40 border border-red-700 rounded p-2 text-xs text-red-300">{parsed.headerError}</div>
+                    )}
+                    {parsed.rows.length > 0 && (
+                        <div className="bg-dark-900 rounded-lg border border-white/5 overflow-hidden">
+                            <div className="px-3 py-2 border-b border-white/5 text-[11px] text-gray-400 flex justify-between">
+                                <span>{parsed.rows.length} rijen · {validCount} klaar · {skipCount} skipped</span>
+                            </div>
+                            <div className="max-h-48 overflow-y-auto">
+                                {parsed.rows.map(r => {
+                                    const hasErr = r.errors.length > 0;
+                                    const hasWarn = r.warnings.length > 0;
+                                    return (
+                                        <div key={r.rowNum} className={`px-3 py-1.5 text-[11px] border-b border-white/5 flex items-center gap-2 ${r.skip ? 'opacity-40' : ''} ${hasErr ? 'bg-red-900/20' : hasWarn ? 'bg-yellow-900/20' : ''}`}>
+                                            <input type="checkbox" checked={!r.skip && !hasErr} disabled={hasErr}
+                                                onChange={() => toggleSkip(r.rowNum)} className="flex-shrink-0" />
+                                            <span className="text-gray-500 w-6 flex-shrink-0">{r.rowNum}</span>
+                                            <span className="flex-1 truncate text-gray-300">{r.fields.headline || r.fields.naam || r.fields.posttekst?.slice(0, 40) || '(leeg)'}</span>
+                                            {hasErr && <span className="text-red-400 text-[10px]" title={r.errors.join('; ')}>⚠ {r.errors[0]}</span>}
+                                            {!hasErr && hasWarn && <span className="text-yellow-400 text-[10px]" title={r.warnings.join('; ')}>⚠</span>}
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Generate ZIP */}
+                    <button onClick={generateBulk} disabled={!validCount || progress}
+                        className="w-full bg-white text-black font-bold py-3 rounded-lg hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 text-sm">
+                        {progress ? `Bezig (${progress.done}/${progress.total})` : `Genereer ZIP (${validCount} mockups)`}
+                    </button>
+                </div>
+            );
+        }
+
+        // ============== PASSWORD GATE ==============
+        function PasswordGate({ onAuthed }) {
+            const [pw, setPw] = useState('');
+            const [error, setError] = useState('');
+            const [loading, setLoading] = useState(false);
+
+            const submit = async (e) => {
+                e.preventDefault();
+                if (!pw) return;
+                setLoading(true);
+                setError('');
+                localStorage.setItem(PW_STORAGE_KEY, pw);
+                try {
+                    await apiCall('designs', 'list');
+                    onAuthed();
+                } catch (err) {
+                    localStorage.removeItem(PW_STORAGE_KEY);
+                    if (err.message === 'WRONG_PASSWORD') setError('Onjuist wachtwoord.');
+                    else setError('Kan geen verbinding maken: ' + err.message);
+                    setLoading(false);
+                }
+            };
+
+            return (
+                <div className="fixed inset-0 bg-dark-900 flex items-center justify-center z-50 p-4">
+                    <form onSubmit={submit} className="bg-dark-800 p-8 rounded-2xl border border-white/10 w-full max-w-sm space-y-4 shadow-2xl">
+                        <div>
+                            <h1 className="text-2xl font-bold bg-gradient-to-r from-blue-400 to-purple-400 bg-clip-text text-transparent">SocialFrame v3</h1>
+                            <p className="text-sm text-gray-400 mt-1">Voer het team-wachtwoord in om bij de cloud-bibliotheek te komen.</p>
+                        </div>
+                        <input
+                            type="password"
+                            value={pw}
+                            onChange={e => setPw(e.target.value)}
+                            className="w-full bg-dark-900 border border-gray-700 rounded px-3 py-2.5 text-sm focus:border-blue-500 outline-none"
+                            placeholder="Wachtwoord"
+                            autoFocus
+                        />
+                        {error && <p className="text-xs text-red-400">{error}</p>}
+                        <button type="submit" disabled={loading || !pw}
+                            className="w-full bg-white text-black font-bold py-2.5 rounded-lg hover:bg-gray-200 disabled:opacity-50">
+                            {loading ? 'Verifiëren…' : 'Inloggen'}
+                        </button>
+                    </form>
+                </div>
+            );
+        }
+
+        // ============== APP ==============
+        function App() {
+            const [authed, setAuthed] = useState(false);
+            const [authChecking, setAuthChecking] = useState(true);
+
+            useEffect(() => {
+                const pw = localStorage.getItem(PW_STORAGE_KEY);
+                if (!pw) { setAuthChecking(false); return; }
+                // Verify password is still valid
+                apiCall('designs', 'list')
+                    .then(() => { setAuthed(true); setAuthChecking(false); })
+                    .catch(() => { setAuthChecking(false); });
+            }, []);
+
+            if (authChecking) {
+                return <div className="h-screen flex items-center justify-center text-gray-400 text-sm">Verbinding maken…</div>;
+            }
+            if (!authed) return <PasswordGate onAuthed={() => setAuthed(true)} />;
+
+            return <Workspace onLogout={() => { localStorage.removeItem(PW_STORAGE_KEY); setAuthed(false); }} />;
+        }
+
+        function Workspace({ onLogout }) {
+            const [platformId, setPlatformId] = useState('linkedin');
+            const [formatId, setFormatId] = useState('feed-4-5');
+            const [sidebarTab, setSidebarTab] = useState('edit');
+            const [loading, setLoading] = useState(false);
+            const [batchProgress, setBatchProgress] = useState(null);
+            const [savedDesigns, setSavedDesigns] = useState([]);
+            const [brandKits, setBrandKits] = useState([]);
+            const [dropping, setDropping] = useState(false);
+
+            // Bulk-tab state (v3)
+            const [bulkMode, setBulkMode] = useState('simple');
+            const [bulkDefaults, setBulkDefaults] = useState({
+                brand: null,
+                platformId: 'linkedin',
+                formatId: 'feed-4-5',
+                frame: 'shadow',
+            });
+
+            const [content, setContent] = useState({
+                avatar: null,
+                mainImage: null,
+                name: 'Bedrijfsnaam B.V.',
+                text: 'Ontdek onze nieuwste collectie! We hebben hard gewerkt aan unieke designs.',
+                headline: 'Nieuwe Collectie',
+                buttonText: 'Lees meer',
+                url: 'bedrijfsnaam.nl',
+                verified: false,
+                likes: 124,
+                comments: 12,
+                shares: 4,
+                imageDescription: '',  // briefing-tekst voor de vormgever wanneer er nog geen foto is
+                imageText: '',          // tekst die op het beeld moet komen
+            });
+
+            const [style, setStyle] = useState({
+                bgColor1: '#ffffff',
+                bgColor2: '#f4f4f5',
+                bgType: 'solid',
+                padding: 40,
+                darkMode: false,
+                deviceFrame: 'shadow', // 'none' | 'shadow' | 'outline'
+                phoneWidth: 320,
+                phoneHeight: 650,
+            });
+
+            const [exportOpts, setExportOpts] = useState({
+                formats: { 'feed-4-5': true, 'feed-1-1': false, 'feed-1-91': false, 'story-9-16': false },
+                platforms: { linkedin: true, meta: false, instagram: false, tiktok: false },
+                modes: { light: true, dark: false }
+            });
+
+            // Load saved data from Supabase
+            useEffect(() => {
+                (async () => {
+                    try {
+                        const [d, b] = await Promise.all([
+                            apiCall('designs', 'list'),
+                            apiCall('brand_kits', 'list'),
+                        ]);
+                        setSavedDesigns(d.map(fromDbDesign));
+                        setBrandKits(b.map(fromDbKit));
+                    } catch (e) {
+                        console.error('Load failed:', e);
+                    }
+                })();
+            }, []);
+
+            // Paste handler
+            useEffect(() => {
+                const handlePaste = async (e) => {
+                    if (!e.clipboardData) return;
+                    for (const item of e.clipboardData.items) {
+                        if (item.type.startsWith('image/')) {
+                            const file = item.getAsFile();
+                            if (file) {
+                                const data = await fileToImageData(file);
+                                setContent(prev => ({ ...prev, mainImage: data }));
+                                return;
+                            }
+                        }
+                    }
+                };
+                document.addEventListener('paste', handlePaste);
+                return () => document.removeEventListener('paste', handlePaste);
+            }, []);
+
+            const platform = PLATFORMS[platformId];
+            const format = FORMATS[formatId];
+
+            const updateContent = (k, v) => setContent(prev => ({ ...prev, [k]: v }));
+            const updateStyle = (k, v) => setStyle(prev => ({ ...prev, [k]: v }));
+
+            const handleImageUpload = async (key, e) => {
+                const file = e.target.files?.[0];
+                if (!file) return;
+                const data = await fileToImageData(file);
+                setContent(prev => ({ ...prev, [key]: data }));
+                e.target.value = ''; // allow re-upload of same file
+            };
+
+            const handleDrop = async (e) => {
+                e.preventDefault();
+                setDropping(false);
+                const file = e.dataTransfer.files?.[0];
+                if (!file?.type.startsWith('image/')) return;
+                const data = await fileToImageData(file);
+                setContent(prev => ({ ...prev, mainImage: data }));
+            };
+
+            const applyPlatform = (id) => {
+                setPlatformId(id);
+                const p = PLATFORMS[id];
+                setContent(prev => ({ ...prev, buttonText: p.buttonText }));
+                if (p.layout === 'story' && !FORMATS[formatId].isStory) setFormatId('story-9-16');
+                if (p.layout !== 'story' && FORMATS[formatId].isStory) setFormatId('feed-4-5');
+            };
+
+            const applyFormat = (id) => {
+                setFormatId(id);
+                if (FORMATS[id].isStory && PLATFORMS[platformId].layout !== 'story') setPlatformId('tiktok');
+                if (!FORMATS[id].isStory && PLATFORMS[platformId].layout === 'story') setPlatformId('instagram');
+            };
+
+            // Brand kits (cloud)
+            const saveBrandKit = async () => {
+                const kitName = prompt('Naam voor deze brand kit (bv. Cosis):');
+                if (!kitName) return;
+                const kit = {
+                    id: Date.now(),
+                    name: kitName,
+                    avatar: content.avatar,
+                    senderName: content.name,
+                    url: content.url,
+                    verified: content.verified,
+                };
+                try {
+                    await apiCall('brand_kits', 'save', toDbKit(kit));
+                    const list = await apiCall('brand_kits', 'list');
+                    setBrandKits(list.map(fromDbKit));
+                } catch (e) { alert('Opslaan mislukt: ' + e.message); }
+            };
+
+            const loadBrandKit = (kit) => {
+                setContent(prev => ({
+                    ...prev,
+                    avatar: kit.avatar,
+                    name: kit.senderName,
+                    url: kit.url,
+                    verified: kit.verified ?? false
+                }));
+            };
+
+            const deleteBrandKit = async (id, e) => {
+                e.stopPropagation();
+                try {
+                    await apiCall('brand_kits', 'delete', { id: String(id) });
+                    const list = await apiCall('brand_kits', 'list');
+                    setBrandKits(list.map(fromDbKit));
+                } catch (err) { alert('Verwijderen mislukt: ' + err.message); }
+            };
+
+            // Designs library (cloud)
+            const saveDesign = async () => {
+                const newDesign = {
+                    id: Date.now(),
+                    date: new Date().toLocaleDateString() + ' ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                    platformId, formatId, content, style
+                };
+                try {
+                    await apiCall('designs', 'save', toDbDesign(newDesign));
+                    const list = await apiCall('designs', 'list');
+                    setSavedDesigns(list.map(fromDbDesign));
+                    setSidebarTab('library');
+                } catch (e) { alert('Opslaan mislukt: ' + e.message); }
+            };
+
+            const loadDesign = (d) => {
+                if (d.platformId) setPlatformId(d.platformId);
+                if (d.formatId) setFormatId(d.formatId);
+                setContent(d.content);
+                setStyle(d.style);
+                setSidebarTab('edit');
+            };
+
+            const deleteDesign = async (id, e) => {
+                e.stopPropagation();
+                try {
+                    await apiCall('designs', 'delete', { id: String(id) });
+                    const list = await apiCall('designs', 'list');
+                    setSavedDesigns(list.map(fromDbDesign));
+                } catch (err) { alert('Verwijderen mislukt: ' + err.message); }
+            };
+
+            // Single-shot PNG download — gebruikt dezelfde renderToCanvas als de preview
+            const generateCanvas = async () => {
+                setLoading(true);
+                await new Promise(r => setTimeout(r, 50));
+                try {
+                    const canvas = await renderToCanvas({ platformId, formatId, content, style });
+                    canvas.toBlob((blob) => {
+                        saveAs(blob, `${content.name.replace(/\s/g, '_')}_${platformId}_${formatId}.png`);
+                        setLoading(false);
+                    }, 'image/png');
+                } catch (e) {
+                    console.error(e);
+                    setLoading(false);
+                }
+            };
+
+            const generateBatch = async () => {
+                const platforms = Object.entries(exportOpts.platforms).filter(([_, v]) => v).map(([k]) => k);
+                const formats = Object.entries(exportOpts.formats).filter(([_, v]) => v).map(([k]) => k);
+                const modes = Object.entries(exportOpts.modes).filter(([_, v]) => v).map(([k]) => k);
+
+                if (!platforms.length || !formats.length || !modes.length) {
+                    alert('Selecteer minimaal één platform, formaat en modus.');
+                    return;
+                }
+
+                setLoading(true);
+                const zip = new JSZip();
+                const total = platforms.length * formats.length * modes.length;
+                let done = 0;
+                setBatchProgress({ done, total });
+
+                for (const p of platforms) {
+                    for (const f of formats) {
+                        for (const m of modes) {
+                            try {
+                                const canvas = await renderToCanvas({
+                                    platformId: p, formatId: f, content, style, darkMode: m === 'dark',
+                                });
+                                const blob = await new Promise(res => canvas.toBlob(res, 'image/png'));
+                                zip.file(`${content.name.replace(/\s/g, '_')}_${p}_${f}_${m}.png`, blob);
+                            } catch (e) { console.error('Variant failed', p, f, m, e); }
+                            done++;
+                            setBatchProgress({ done, total });
+                        }
+                    }
+                }
+
+                const zipBlob = await zip.generateAsync({ type: 'blob' });
+                saveAs(zipBlob, `${content.name.replace(/\s/g, '_')}_socialframe.zip`);
+                setBatchProgress(null);
+                setLoading(false);
+            };
+
+            // ----- RENDER -----
+            return (
+                <div className="flex flex-col md:flex-row h-screen">
+                    <aside className="w-full md:w-96 bg-dark-800 border-r border-white/10 flex flex-col z-20 shadow-2xl">
+                        <div className="p-5 border-b border-white/10 flex-shrink-0 flex items-start justify-between gap-2">
+                            <div>
+                                <h1 className="text-xl font-bold bg-gradient-to-r from-blue-400 to-purple-400 bg-clip-text text-transparent">SocialFrame v3</h1>
+                                <p className="text-[11px] text-gray-400 mt-1">Cloud-bibliotheek · gedeeld team</p>
+                            </div>
+                            <button onClick={onLogout} className="text-[11px] text-gray-500 hover:text-gray-300 px-2 py-1 -mr-2 -mt-1">
+                                Uitloggen
+                            </button>
+                        </div>
+
+                        <div className="flex border-b border-white/10 flex-shrink-0">
+                            {[['edit', 'Edit'], ['library', 'Library'], ['brands', 'Brands'], ['bulk', 'Bulk'], ['export', 'Export']].map(([id, label]) => (
+                                <button key={id} onClick={() => setSidebarTab(id)}
+                                    className={`flex-1 py-3 text-xs font-medium transition-colors ${sidebarTab === id ? 'text-white border-b-2 border-blue-500' : 'text-gray-500 hover:text-gray-300'}`}>
+                                    {label}
+                                    {id === 'library' && <span className="text-[10px] bg-gray-700 px-1.5 py-0.5 rounded-full ml-1">{savedDesigns.length}</span>}
+                                    {id === 'brands' && <span className="text-[10px] bg-gray-700 px-1.5 py-0.5 rounded-full ml-1">{brandKits.length}</span>}
+                                </button>
+                            ))}
+                        </div>
+
+                        {sidebarTab === 'edit' && (
+                            <div className="p-5 space-y-5 animate-fade-in flex-grow overflow-y-auto">
+                                <div className="grid grid-cols-2 gap-2">
+                                    <div>
+                                        <label className="block text-[11px] text-gray-400 mb-1">Platform</label>
+                                        <select value={platformId} onChange={e => applyPlatform(e.target.value)}
+                                            className="w-full bg-dark-900 border border-gray-700 rounded px-2 py-2 text-sm">
+                                            {Object.entries(PLATFORMS).map(([id, p]) => <option key={id} value={id}>{p.name}</option>)}
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label className="block text-[11px] text-gray-400 mb-1">Format</label>
+                                        <select value={formatId} onChange={e => applyFormat(e.target.value)}
+                                            className="w-full bg-dark-900 border border-gray-700 rounded px-2 py-2 text-sm">
+                                            {Object.entries(FORMATS).map(([id, f]) => <option key={id} value={id}>{f.name}</option>)}
+                                        </select>
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <h3 className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-2">Assets</h3>
+                                    <div className="flex gap-3">
+                                        <div className="flex-1">
+                                            <label className="block text-[11px] text-gray-400 mb-1">Avatar</label>
+                                            <label className={`w-full aspect-square bg-dark-900 border border-dashed border-gray-600 flex items-center justify-center cursor-pointer hover:border-blue-500 overflow-hidden ${platform.avatarShape === 'circle' ? 'rounded-full' : 'rounded-lg'}`}>
+                                                {content.avatar ? <img src={content.avatar.src} className="w-full h-full object-cover" /> : <Icons.User />}
+                                                <input type="file" accept="image/*" onChange={e => handleImageUpload('avatar', e)} />
+                                            </label>
+                                        </div>
+                                        <div className="flex-[3]">
+                                            <label className="block text-[11px] text-gray-400 mb-1">Foto · sleep · Cmd+V</label>
+                                            <label className="w-full h-24 bg-dark-900 border border-dashed border-gray-600 rounded-lg flex flex-col items-center justify-center cursor-pointer hover:border-blue-500 overflow-hidden relative">
+                                                {content.mainImage ? <img src={content.mainImage.src} className="w-full h-full object-cover opacity-50" /> : (
+                                                    <div className="flex flex-col items-center text-gray-500">
+                                                        <Icons.Image />
+                                                        <span className="text-[10px] mt-1">Klik / Sleep / Cmd+V</span>
+                                                    </div>
+                                                )}
+                                                <input type="file" accept="image/*" onChange={e => handleImageUpload('mainImage', e)} />
+                                            </label>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="space-y-3">
+                                    <h3 className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Content</h3>
+                                    <div>
+                                        <label className="block text-[11px] text-gray-400 mb-1">Naam</label>
+                                        <div className="flex gap-2 items-center">
+                                            <input type="text" value={content.name} onChange={e => updateContent('name', e.target.value)}
+                                                className="flex-1 bg-dark-900 border border-gray-700 rounded px-2 py-2 text-sm" />
+                                            <label className="flex items-center gap-1 text-[11px] text-gray-400 cursor-pointer whitespace-nowrap">
+                                                <input type="checkbox" checked={content.verified} onChange={e => updateContent('verified', e.target.checked)} />
+                                                Verified
+                                            </label>
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label className="block text-[11px] text-gray-400 mb-1">Post-tekst</label>
+                                        <textarea rows="3" value={content.text} onChange={e => updateContent('text', e.target.value)}
+                                            className="w-full bg-dark-900 border border-gray-700 rounded px-2 py-2 text-sm resize-none" />
+                                    </div>
+
+                                    {!content.mainImage && (
+                                        <div className="space-y-2 pt-2 border-t border-white/5">
+                                            <div className="text-[10px] text-gray-500 uppercase tracking-wider">Beeld-briefing (geen foto)</div>
+                                            <div>
+                                                <label className="block text-[11px] text-gray-400 mb-1">Beschrijving beeld</label>
+                                                <input type="text" value={content.imageDescription || ''}
+                                                    placeholder="Stockphoto: zorgmedewerker, close-up"
+                                                    onChange={e => updateContent('imageDescription', e.target.value)}
+                                                    className="w-full bg-dark-900 border border-gray-700 rounded px-2 py-2 text-sm" />
+                                            </div>
+                                            <div>
+                                                <label className="block text-[11px] text-gray-400 mb-1">Tekst in beeld</label>
+                                                <textarea rows="2" value={content.imageText || ''}
+                                                    placeholder="Soms ga ik leeg naar huis..."
+                                                    onChange={e => updateContent('imageText', e.target.value)}
+                                                    className="w-full bg-dark-900 border border-gray-700 rounded px-2 py-2 text-sm resize-none" />
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {platform.layout === 'feed-cta' && (
+                                        <div className="grid grid-cols-2 gap-2">
+                                            <div className="col-span-2">
+                                                <label className="block text-[11px] text-gray-400 mb-1">Headline</label>
+                                                <input type="text" value={content.headline} onChange={e => updateContent('headline', e.target.value)}
+                                                    className="w-full bg-dark-900 border border-gray-700 rounded px-2 py-2 text-sm" />
+                                            </div>
+                                            <div>
+                                                <label className="block text-[11px] text-gray-400 mb-1">Knop</label>
+                                                <input type="text" value={content.buttonText} onChange={e => updateContent('buttonText', e.target.value)}
+                                                    className="w-full bg-dark-900 border border-gray-700 rounded px-2 py-2 text-sm" />
+                                            </div>
+                                            <div>
+                                                <label className="block text-[11px] text-gray-400 mb-1">URL</label>
+                                                <input type="text" value={content.url} onChange={e => updateContent('url', e.target.value)}
+                                                    className="w-full bg-dark-900 border border-gray-700 rounded px-2 py-2 text-sm" />
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {(platform.layout === 'feed-icons' || platform.layout === 'story') && (
+                                        <div>
+                                            <label className="block text-[11px] text-gray-400 mb-1">Knop-tekst</label>
+                                            <input type="text" value={content.buttonText} onChange={e => updateContent('buttonText', e.target.value)}
+                                                className="w-full bg-dark-900 border border-gray-700 rounded px-2 py-2 text-sm" />
+                                        </div>
+                                    )}
+
+                                    {(platform.layout === 'feed-icons' || platform.layout === 'story') && (
+                                        <div className="grid grid-cols-3 gap-2">
+                                            <div>
+                                                <label className="block text-[10px] text-gray-400 mb-1">❤ Likes</label>
+                                                <input type="number" value={content.likes} onChange={e => updateContent('likes', parseInt(e.target.value) || 0)}
+                                                    className="w-full bg-dark-900 border border-gray-700 rounded px-2 py-2 text-sm" />
+                                            </div>
+                                            <div>
+                                                <label className="block text-[10px] text-gray-400 mb-1">💬 Comments</label>
+                                                <input type="number" value={content.comments} onChange={e => updateContent('comments', parseInt(e.target.value) || 0)}
+                                                    className="w-full bg-dark-900 border border-gray-700 rounded px-2 py-2 text-sm" />
+                                            </div>
+                                            <div>
+                                                <label className="block text-[10px] text-gray-400 mb-1">↗ Shares</label>
+                                                <input type="number" value={content.shares} onChange={e => updateContent('shares', parseInt(e.target.value) || 0)}
+                                                    className="w-full bg-dark-900 border border-gray-700 rounded px-2 py-2 text-sm" />
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+
+                                <div className="space-y-3">
+                                    <h3 className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Style</h3>
+                                    <div>
+                                        <label className="block text-[11px] text-gray-400 mb-1">Phone Width ({style.phoneWidth}px)</label>
+                                        <input type="range" min="280" max="450" step="5" value={style.phoneWidth}
+                                            onChange={e => updateStyle('phoneWidth', parseInt(e.target.value))} className="w-full" />
+                                    </div>
+                                    <div>
+                                        <label className="block text-[11px] text-gray-400 mb-1">Phone Height min ({style.phoneHeight}px)</label>
+                                        <input type="range" min="500" max="900" step="5" value={style.phoneHeight}
+                                            onChange={e => updateStyle('phoneHeight', parseInt(e.target.value))} className="w-full" />
+                                    </div>
+                                    <div className="flex items-center justify-between">
+                                        <span className="text-sm text-gray-300">Dark mode</span>
+                                        <button onClick={() => updateStyle('darkMode', !style.darkMode)}
+                                            className={`w-10 h-5 rounded-full relative ${style.darkMode ? 'bg-blue-600' : 'bg-gray-700'}`}>
+                                            <div className={`w-3 h-3 bg-white rounded-full absolute top-1 ${style.darkMode ? 'left-6' : 'left-1'}`}></div>
+                                        </button>
+                                    </div>
+                                    <div>
+                                        <label className="block text-[11px] text-gray-400 mb-1">Telefoon-frame</label>
+                                        <div className="grid grid-cols-3 gap-1 bg-dark-900 p-1 rounded-lg border border-white/5">
+                                            {[['none','Geen'],['shadow','Schaduw'],['outline','Outline']].map(([id,label]) => (
+                                                <button key={id} onClick={() => updateStyle('deviceFrame', id)}
+                                                    className={`py-1.5 text-xs font-medium rounded-md transition-all ${style.deviceFrame === id ? 'bg-dark-700 text-white shadow' : 'text-gray-500 hover:text-gray-300'}`}>
+                                                    {label}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label className="block text-[11px] text-gray-400 mb-1">Achtergrond</label>
+                                        <div className="flex gap-2">
+                                            <div className="h-8 w-8 rounded-full overflow-hidden border border-gray-600 relative cursor-pointer" style={{ background: style.bgColor1 }}>
+                                                <input type="color" value={style.bgColor1} onChange={e => updateStyle('bgColor1', e.target.value)} className="opacity-0 w-full h-full cursor-pointer" />
+                                            </div>
+                                            {style.bgType === 'gradient' && (
+                                                <div className="h-8 w-8 rounded-full overflow-hidden border border-gray-600 relative cursor-pointer" style={{ background: style.bgColor2 }}>
+                                                    <input type="color" value={style.bgColor2} onChange={e => updateStyle('bgColor2', e.target.value)} className="opacity-0 w-full h-full cursor-pointer" />
+                                                </div>
+                                            )}
+                                            <select value={style.bgType} onChange={e => updateStyle('bgType', e.target.value)} className="ml-auto bg-dark-900 border border-gray-700 rounded px-2 text-xs">
+                                                <option value="solid">Solid</option>
+                                                <option value="gradient">Gradient</option>
+                                                <option value="transparent">Transparent</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="flex gap-2 pt-2">
+                                    <button onClick={saveDesign} className="flex-1 bg-gray-700 text-white font-bold py-2.5 rounded-lg hover:bg-gray-600 flex items-center justify-center gap-2 text-sm">
+                                        <Icons.Save /> Save
+                                    </button>
+                                    <button onClick={generateCanvas} disabled={loading} className="flex-1 bg-white text-black font-bold py-2.5 rounded-lg hover:bg-gray-200 flex items-center justify-center gap-2 text-sm">
+                                        {loading && !batchProgress ? <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-black"></div> : <><Icons.Download /> PNG</>}
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+
+                        {sidebarTab === 'library' && (
+                            <div className="p-4 space-y-3 animate-fade-in flex-grow overflow-y-auto">
+                                {savedDesigns.length === 0 ? (
+                                    <div className="text-center text-gray-500 py-10 text-sm">Nog geen ontwerpen.</div>
+                                ) : savedDesigns.map(d => (
+                                    <div key={d.id} onClick={() => loadDesign(d)}
+                                        className="bg-dark-700 border border-white/5 rounded-lg p-3 cursor-pointer hover:border-blue-500 flex gap-3 group">
+                                        <div className="w-12 h-12 rounded bg-gray-800 flex-shrink-0 overflow-hidden">
+                                            {d.content.mainImage ? <img src={d.content.mainImage.src} className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center text-gray-600"><Icons.Image /></div>}
+                                        </div>
+                                        <div className="flex-1 min-w-0">
+                                            <div className="flex justify-between">
+                                                <span className="text-[10px] font-bold text-gray-400 uppercase">{PLATFORMS[d.platformId]?.name || 'Feed'}</span>
+                                                <button onClick={e => deleteDesign(d.id, e)} className="text-gray-500 hover:text-red-400"><Icons.Trash /></button>
+                                            </div>
+                                            <p className="text-sm font-medium truncate">{d.content.name}</p>
+                                            <p className="text-[10px] text-gray-500">{d.date}</p>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+
+                        {sidebarTab === 'brands' && (
+                            <div className="p-4 space-y-3 animate-fade-in flex-grow overflow-y-auto">
+                                <button onClick={saveBrandKit} className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-2.5 rounded-lg flex items-center justify-center gap-2 text-sm">
+                                    <Icons.Plus /> Brand opslaan
+                                </button>
+                                <p className="text-[11px] text-gray-500">Naam + avatar + URL — wissel snel tussen klanten.</p>
+                                {brandKits.length === 0 ? (
+                                    <div className="text-center text-gray-500 py-10 text-sm">Nog geen brand kits.</div>
+                                ) : brandKits.map(k => (
+                                    <div key={k.id} onClick={() => loadBrandKit(k)}
+                                        className="bg-dark-700 border border-white/5 rounded-lg p-3 cursor-pointer hover:border-blue-500 flex gap-3">
+                                        <div className="w-12 h-12 rounded-full bg-gray-800 flex-shrink-0 overflow-hidden">
+                                            {k.avatar ? <img src={k.avatar.src} className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center text-gray-600"><Icons.Briefcase /></div>}
+                                        </div>
+                                        <div className="flex-1 min-w-0">
+                                            <div className="flex justify-between items-start">
+                                                <span className="text-[10px] font-bold text-gray-400 uppercase truncate">{k.name}</span>
+                                                <button onClick={e => deleteBrandKit(k.id, e)} className="text-gray-500 hover:text-red-400"><Icons.Trash /></button>
+                                            </div>
+                                            <p className="text-sm font-medium truncate">{k.senderName}</p>
+                                            <p className="text-[10px] text-gray-500 truncate">{k.url}</p>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+
+                        {sidebarTab === 'bulk' && (
+                            <BulkPanel
+                                brandKits={brandKits}
+                                defaults={bulkDefaults}
+                                setDefaults={setBulkDefaults}
+                                mode={bulkMode}
+                                setMode={setBulkMode}
+                            />
+                        )}
+
+                        {sidebarTab === 'export' && (
+                            <div className="p-5 space-y-5 animate-fade-in flex-grow overflow-y-auto">
+                                <p className="text-[12px] text-gray-400">Vink platforms × formaten × modi aan en download alles als ZIP.</p>
+                                <div>
+                                    <h3 className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-2">Platforms</h3>
+                                    <div className="space-y-1.5">
+                                        {Object.entries(PLATFORMS).map(([id, p]) => (
+                                            <label key={id} className="flex items-center gap-2 text-sm cursor-pointer">
+                                                <input type="checkbox" checked={exportOpts.platforms[id]}
+                                                    onChange={e => setExportOpts(prev => ({ ...prev, platforms: { ...prev.platforms, [id]: e.target.checked } }))} />
+                                                {p.name}
+                                            </label>
+                                        ))}
+                                    </div>
+                                </div>
+                                <div>
+                                    <h3 className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-2">Formaten</h3>
+                                    <div className="space-y-1.5">
+                                        {Object.entries(FORMATS).map(([id, f]) => (
+                                            <label key={id} className="flex items-center gap-2 text-sm cursor-pointer">
+                                                <input type="checkbox" checked={exportOpts.formats[id]}
+                                                    onChange={e => setExportOpts(prev => ({ ...prev, formats: { ...prev.formats, [id]: e.target.checked } }))} />
+                                                {f.name}
+                                            </label>
+                                        ))}
+                                    </div>
+                                </div>
+                                <div>
+                                    <h3 className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-2">Modus</h3>
+                                    <label className="flex items-center gap-2 text-sm cursor-pointer">
+                                        <input type="checkbox" checked={exportOpts.modes.light}
+                                            onChange={e => setExportOpts(prev => ({ ...prev, modes: { ...prev.modes, light: e.target.checked } }))} /> Light
+                                    </label>
+                                    <label className="flex items-center gap-2 text-sm cursor-pointer mt-1.5">
+                                        <input type="checkbox" checked={exportOpts.modes.dark}
+                                            onChange={e => setExportOpts(prev => ({ ...prev, modes: { ...prev.modes, dark: e.target.checked } }))} /> Dark
+                                    </label>
+                                </div>
+                                <button onClick={generateBatch} disabled={loading}
+                                    className="w-full bg-white text-black font-bold py-3 rounded-lg hover:bg-gray-200 flex items-center justify-center gap-2 text-sm">
+                                    <Icons.Package />
+                                    {batchProgress ? `Bezig (${batchProgress.done}/${batchProgress.total})` : 'Export ZIP'}
+                                </button>
+                            </div>
+                        )}
+                    </aside>
+
+                    <main
+                        className={`flex-1 bg-black relative flex items-center justify-center p-8 checkerboard overflow-auto ${dropping ? 'dropzone-active' : ''}`}
+                        onDragOver={e => { e.preventDefault(); setDropping(true); }}
+                        onDragLeave={() => setDropping(false)}
+                        onDrop={handleDrop}
+                    >
+                        <CanvasPreview platformId={platformId} formatId={formatId} content={content} style={style} />
+                    </main>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
