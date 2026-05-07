@@ -141,6 +141,12 @@
             content: d.content,
             style: d.style,
             date: d.date,
+            // v3.1 — collab gallery
+            share_token: d.shareToken ?? null,
+            share_expires_at: d.shareExpiresAt ?? null,
+            awaiting_photo: !!d.awaitingPhoto,
+            bulk_run_id: d.bulkRunId ?? null,
+            bulk_run_label: d.bulkRunLabel ?? null,
         });
         const fromDbDesign = (d) => ({
             id: d.id,
@@ -149,6 +155,12 @@
             content: d.content,
             style: d.style,
             date: d.date,
+            shareToken: d.share_token ?? null,
+            shareExpiresAt: d.share_expires_at ?? null,
+            awaitingPhoto: !!d.awaiting_photo,
+            bulkRunId: d.bulk_run_id ?? null,
+            bulkRunLabel: d.bulk_run_label ?? null,
+            createdAt: d.created_at ?? null,
         });
         const toDbKit = (k) => ({
             id: String(k.id),
@@ -1075,13 +1087,225 @@ Kolommen-uitleg:
 Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
         };
 
-        function BulkPanel({ brandKits, defaults, setDefaults, mode, setMode, onZipReady }) {
+        // ============== GALLERY PANEL (v3.1) ==============
+        // Toont opgeslagen mockups gegroepeerd per bulk-run. Ungrouped (single
+        // saves zonder bulk_run_id) staan bovenaan. Per item: status-badge,
+        // share-knop, download-knop, delete-knop.
+        function GalleryPanel({ designs, expandedRuns, toggleRunExpand, onLoad, onDelete, onDeleteRun, onShare, onDownload, onRefresh, refreshing }) {
+            // Group designs by bulkRunId
+            const groups = useMemo(() => {
+                const ungrouped = [];
+                const byRun = new Map(); // runId → { label, items, latestDate }
+                for (const d of designs) {
+                    if (d.bulkRunId) {
+                        if (!byRun.has(d.bulkRunId)) {
+                            byRun.set(d.bulkRunId, {
+                                runId: d.bulkRunId,
+                                label: d.bulkRunLabel || d.bulkRunId,
+                                items: [],
+                                latestCreatedAt: d.createdAt || '',
+                            });
+                        }
+                        const g = byRun.get(d.bulkRunId);
+                        g.items.push(d);
+                        if ((d.createdAt || '') > g.latestCreatedAt) g.latestCreatedAt = d.createdAt;
+                    } else {
+                        ungrouped.push(d);
+                    }
+                }
+                // Sort runs by latestCreatedAt desc
+                const runs = Array.from(byRun.values()).sort((a, b) => (b.latestCreatedAt || '').localeCompare(a.latestCreatedAt || ''));
+                return { ungrouped, runs };
+            }, [designs]);
+
+            const totalCount = designs.length;
+            const awaitingCount = designs.filter(d => d.awaitingPhoto).length;
+
+            const Badge = ({ d }) => {
+                if (d.shareToken) return <span className="text-[9px] px-1.5 py-0.5 rounded bg-blue-900/50 text-blue-300 whitespace-nowrap">🔗 gedeeld</span>;
+                if (d.awaitingPhoto) return <span className="text-[9px] px-1.5 py-0.5 rounded bg-yellow-900/50 text-yellow-300 whitespace-nowrap">📷 wacht op foto</span>;
+                if (d.content?.mainImage) return <span className="text-[9px] px-1.5 py-0.5 rounded bg-green-900/40 text-green-300 whitespace-nowrap">✓ compleet</span>;
+                return null;
+            };
+
+            const renderItem = (d) => (
+                <div key={d.id} className="bg-dark-700 border border-white/5 rounded-lg p-2.5 hover:border-blue-500 transition-colors">
+                    <div className="flex gap-2.5">
+                        <div onClick={() => onLoad(d)} className="w-12 h-12 rounded bg-gray-800 flex-shrink-0 overflow-hidden cursor-pointer">
+                            {d.content?.mainImage?.src ? (
+                                <img src={d.content.mainImage.src} className="w-full h-full object-cover" />
+                            ) : (
+                                <div className="w-full h-full flex items-center justify-center text-gray-600 text-[8px]">
+                                    {d.awaitingPhoto ? '📷' : <Icons.Image />}
+                                </div>
+                            )}
+                        </div>
+                        <div className="flex-1 min-w-0" onClick={() => onLoad(d)} style={{ cursor: 'pointer' }}>
+                            <div className="flex items-center gap-1.5 mb-0.5">
+                                <span className="text-[9px] font-bold text-gray-400 uppercase">{PLATFORMS[d.platformId]?.name || 'Feed'}</span>
+                                <Badge d={d} />
+                            </div>
+                            <p className="text-xs font-medium truncate">{d.content?.headline || d.content?.text?.slice(0, 40) || d.content?.name || '(leeg)'}</p>
+                            <p className="text-[10px] text-gray-500 truncate">{d.content?.name}</p>
+                        </div>
+                    </div>
+                    <div className="flex gap-1 mt-2 text-[10px]">
+                        <button onClick={() => onShare(d)} className="flex-1 bg-dark-800 hover:bg-dark-900 px-2 py-1 rounded text-gray-300">🔗 Deel</button>
+                        <button onClick={() => onDownload(d)} className="flex-1 bg-dark-800 hover:bg-dark-900 px-2 py-1 rounded text-gray-300">⬇ PNG</button>
+                        <button onClick={() => { if (confirm('Mockup verwijderen?')) onDelete(d.id); }} className="bg-dark-800 hover:bg-red-900/50 px-2 py-1 rounded text-gray-500 hover:text-red-300">🗑</button>
+                    </div>
+                </div>
+            );
+
+            return (
+                <div className="p-4 space-y-3 animate-fade-in flex-grow overflow-y-auto">
+                    <div className="flex items-center justify-between">
+                        <div className="text-[11px] text-gray-400">
+                            {totalCount} mockup{totalCount === 1 ? '' : 's'}
+                            {awaitingCount > 0 && <span className="text-yellow-400"> · {awaitingCount} wacht op foto</span>}
+                        </div>
+                        <button onClick={onRefresh} disabled={refreshing}
+                            className="text-[10px] bg-dark-700 hover:bg-dark-900 px-2 py-1 rounded text-gray-400 disabled:opacity-50">
+                            {refreshing ? '…' : '↻ Refresh'}
+                        </button>
+                    </div>
+
+                    {totalCount === 0 && (
+                        <div className="text-center text-gray-500 py-10 text-sm">
+                            Nog geen mockups in de gallery.<br/>
+                            <span className="text-[11px] text-gray-600">Sla iets op via Edit-tab of genereer een batch via Bulk-tab.</span>
+                        </div>
+                    )}
+
+                    {/* Ungrouped (single saves) */}
+                    {groups.ungrouped.length > 0 && (
+                        <div className="space-y-2">
+                            <div className="text-[10px] font-bold text-gray-500 uppercase tracking-wider px-1">Losse mockups</div>
+                            {groups.ungrouped.map(renderItem)}
+                        </div>
+                    )}
+
+                    {/* Bulk-run groups */}
+                    {groups.runs.map(g => {
+                        const isOpen = expandedRuns.has(g.runId);
+                        const awaiting = g.items.filter(i => i.awaitingPhoto).length;
+                        return (
+                            <div key={g.runId} className="bg-dark-900/50 rounded-lg border border-white/5 overflow-hidden">
+                                <div className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-dark-700/50"
+                                    onClick={() => toggleRunExpand(g.runId)}>
+                                    <span className="text-gray-400 text-[10px]">{isOpen ? '▼' : '▶'}</span>
+                                    <div className="flex-1 min-w-0">
+                                        <div className="text-sm font-medium truncate">{g.label}</div>
+                                        <div className="text-[10px] text-gray-500">
+                                            {g.items.length} mockups
+                                            {awaiting > 0 && <span className="text-yellow-400"> · {awaiting} wacht op foto</span>}
+                                        </div>
+                                    </div>
+                                    <button onClick={(e) => { e.stopPropagation(); onDeleteRun(g.runId, g.label); }}
+                                        className="text-[9px] text-gray-500 hover:text-red-300 px-2 py-1">🗑 hele run</button>
+                                </div>
+                                {isOpen && (
+                                    <div className="p-2 space-y-2 border-t border-white/5">
+                                        {g.items.map(renderItem)}
+                                    </div>
+                                )}
+                            </div>
+                        );
+                    })}
+                </div>
+            );
+        }
+
+        // ============== SHARE MODAL (v3.1) ==============
+        // Toont share-URL voor één mockup. Genereert token bij eerste open.
+        function ShareModal({ design, onClose, onEnsureToken, onRevoke }) {
+            const [resolved, setResolved] = useState(design);
+            const [copied, setCopied] = useState(false);
+
+            useEffect(() => {
+                let cancelled = false;
+                (async () => {
+                    if (!design.shareToken) {
+                        const updated = await onEnsureToken(design);
+                        if (!cancelled) setResolved(updated);
+                    } else {
+                        setResolved(design);
+                    }
+                })();
+                return () => { cancelled = true; };
+            }, [design.id]);
+
+            const url = resolved.shareToken
+                ? `${window.location.origin}${window.location.pathname}?share=${resolved.shareToken}`
+                : '';
+
+            const expiresStr = resolved.shareExpiresAt
+                ? new Date(resolved.shareExpiresAt).toLocaleDateString('nl-NL')
+                : '—';
+
+            const copyUrl = async () => {
+                if (!url) return;
+                try {
+                    await navigator.clipboard.writeText(url);
+                    setCopied(true);
+                    setTimeout(() => setCopied(false), 2000);
+                } catch (e) { alert('Kopiëren faalde — selecteer handmatig.'); }
+            };
+
+            return (
+                <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4" onClick={onClose}>
+                    <div className="bg-dark-800 border border-white/10 rounded-2xl p-6 w-full max-w-md space-y-4 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+                        <div>
+                            <h3 className="text-lg font-bold">Deel deze mockup</h3>
+                            <p className="text-xs text-gray-400 mt-1">
+                                De ontvanger ziet alleen deze ene mockup en kan een foto uploaden — geen toegang tot de rest van de tool.
+                            </p>
+                        </div>
+
+                        {!url ? (
+                            <div className="text-center text-gray-500 py-4 text-sm">Token aanmaken…</div>
+                        ) : (
+                            <>
+                                <div>
+                                    <label className="block text-[11px] text-gray-400 mb-1">Share-URL</label>
+                                    <div className="flex gap-2">
+                                        <input type="text" value={url} readOnly
+                                            className="flex-1 bg-dark-900 border border-gray-700 rounded px-2 py-2 text-xs font-mono"
+                                            onFocus={(e) => e.target.select()} />
+                                        <button onClick={copyUrl}
+                                            className="bg-blue-600 hover:bg-blue-500 text-white px-3 rounded text-xs font-bold whitespace-nowrap">
+                                            {copied ? '✓ Gekopieerd' : 'Kopieer'}
+                                        </button>
+                                    </div>
+                                </div>
+                                <div className="text-[11px] text-gray-500">
+                                    Verloopt op: <span className="text-gray-300">{expiresStr}</span>
+                                </div>
+                                <div className="flex gap-2 pt-2 border-t border-white/5">
+                                    <button onClick={() => onRevoke(resolved)}
+                                        className="text-[11px] text-red-400 hover:text-red-300">
+                                        Token intrekken
+                                    </button>
+                                    <button onClick={onClose}
+                                        className="ml-auto bg-gray-700 hover:bg-gray-600 text-white text-sm font-bold py-1.5 px-4 rounded">
+                                        Sluit
+                                    </button>
+                                </div>
+                            </>
+                        )}
+                    </div>
+                </div>
+            );
+        }
+
+        function BulkPanel({ brandKits, defaults, setDefaults, mode, setMode, onMockupsAdded }) {
             const [tsvText, setTsvText] = useState('');
             const [parsed, setParsed] = useState({ rows: [], headerError: null });
             const [bulkImages, setBulkImages] = useState({}); // {filename: imageData}
             const [sharedImage, setSharedImage] = useState(null);
             const [progress, setProgress] = useState(null);
             const [hint, setHint] = useState('');
+            const [campaignLabel, setCampaignLabel] = useState('');
 
             // Re-parse when text/mode/defaults/brands change
             useEffect(() => {
@@ -1136,9 +1360,23 @@ Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
                     alert('Geen geldige rijen om te genereren.');
                     return;
                 }
+                if (!campaignLabel.trim()) {
+                    alert('Vul een campagne-naam in voor deze run.');
+                    return;
+                }
+
                 setProgress({ done: 0, total: valid.length });
                 const zip = new JSZip();
-                const reportLines = [`SocialFrame v3 — bulk export`, `Modus: ${mode}`, `Totaal verwerkt: ${valid.length}`, ''];
+                const reportLines = [`SocialFrame v3 — bulk export`, `Campagne: ${campaignLabel}`, `Modus: ${mode}`, `Totaal verwerkt: ${valid.length}`, ''];
+
+                // Eén bulk_run_id voor alle mockups in deze batch — gebruikt om
+                // ze later in de Gallery te groeperen.
+                const bulkRunId = (typeof crypto !== 'undefined' && crypto.randomUUID)
+                    ? crypto.randomUUID()
+                    : `run-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+                const bulkRunLabel = campaignLabel.trim();
+
+                let cloudSaved = 0;
 
                 for (let i = 0; i < valid.length; i++) {
                     const row = valid[i];
@@ -1150,10 +1388,35 @@ Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
                             content, style,
                         });
                         const blob = await new Promise(res => canvas.toBlob(res, 'image/png'));
-                        // Filename gebruikt de TSV-naam als variant-label (bv. "Concept_1_Post_1_Variant_1")
+
                         const variantLabel = (row.fields.naam || content.name || `row-${row.rowNum}`).replace(/[^a-z0-9_-]/gi, '_');
                         const filename = `${String(i + 1).padStart(3, '0')}_${variantLabel}_${row.platformId}_${row.formatId}.png`;
                         zip.file(filename, blob);
+
+                        // Auto-save naar cloud-gallery (v3.1)
+                        // awaiting_photo = true wanneer er nog geen foto staat én er
+                        // wel een briefing-tekst is ingevuld (concept-fase voor de vormgever).
+                        const hasBriefing = (content.imageDescription && content.imageDescription.trim()) || (content.imageText && content.imageText.trim());
+                        const awaitingPhoto = !content.mainImage && !!hasBriefing;
+                        const designId = `${bulkRunId}-${String(i + 1).padStart(3, '0')}`;
+                        try {
+                            await apiCall('designs_v3', 'save', toDbDesign({
+                                id: designId,
+                                platformId: row.platformId,
+                                formatId: row.formatId,
+                                content,
+                                style,
+                                date: new Date().toLocaleDateString('nl-NL') + ' ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                                awaitingPhoto,
+                                bulkRunId,
+                                bulkRunLabel,
+                            }));
+                            cloudSaved++;
+                        } catch (cloudErr) {
+                            console.error('cloud save failed', cloudErr);
+                            reportLines.push(`     ⚠ cloud-save mislukt: ${cloudErr.message || cloudErr}`);
+                        }
+
                         reportLines.push(`OK   row ${row.rowNum} → ${filename}`);
                         if (row.warnings.length) reportLines.push(`     warnings: ${row.warnings.join('; ')}`);
                     } catch (err) {
@@ -1172,11 +1435,14 @@ Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
                     }
                 }
 
+                reportLines.push('', `Cloud-gallery: ${cloudSaved}/${valid.length} mockups opgeslagen onder "${bulkRunLabel}".`);
+
                 zip.file('_report.txt', reportLines.join('\n'));
+                const safeLabel = bulkRunLabel.replace(/[^a-z0-9_-]/gi, '_');
                 const zipBlob = await zip.generateAsync({ type: 'blob' });
-                saveAs(zipBlob, `socialframe_v3_bulk_${Date.now()}.zip`);
+                saveAs(zipBlob, `${safeLabel}_${Date.now()}.zip`);
                 setProgress(null);
-                if (onZipReady) onZipReady();
+                if (onMockupsAdded) onMockupsAdded(bulkRunId, bulkRunLabel);
             };
 
             const validCount = parsed.rows.filter(r => !r.skip && r.errors.length === 0).length;
@@ -1326,10 +1592,20 @@ Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
                         </div>
                     )}
 
+                    {/* Campagne-naam — verplicht voor cloud-gallery-grouping */}
+                    <div>
+                        <label className="block text-[11px] text-gray-400 mb-1">Campagne-naam (verplicht)</label>
+                        <input type="text" value={campaignLabel}
+                            placeholder="Cosis januari 2026"
+                            onChange={e => setCampaignLabel(e.target.value)}
+                            className="w-full bg-dark-900 border border-gray-700 rounded px-2 py-2 text-sm" />
+                        <p className="text-[10px] text-gray-500 mt-1">Verschijnt als naam in de Gallery én in bestandsnamen.</p>
+                    </div>
+
                     {/* Generate ZIP */}
-                    <button onClick={generateBulk} disabled={!validCount || progress}
+                    <button onClick={generateBulk} disabled={!validCount || progress || !campaignLabel.trim()}
                         className="w-full bg-white text-black font-bold py-3 rounded-lg hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 text-sm">
-                        {progress ? `Bezig (${progress.done}/${progress.total})` : `Genereer ZIP (${validCount} mockups)`}
+                        {progress ? `Bezig (${progress.done}/${progress.total})` : `Genereer ZIP + Gallery (${validCount} mockups)`}
                     </button>
                 </div>
             );
@@ -1348,7 +1624,7 @@ Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
                 setError('');
                 localStorage.setItem(PW_STORAGE_KEY, pw);
                 try {
-                    await apiCall('designs', 'list');
+                    await apiCall(DESIGNS_STORE, 'list');
                     onAuthed();
                 } catch (err) {
                     localStorage.removeItem(PW_STORAGE_KEY);
@@ -1383,19 +1659,140 @@ Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
             );
         }
 
+        // ============== SHARE MODE (v3.1) ==============
+        // Stripped-down view voor URLs met ?share=TOKEN. Geen login, geen sidebar.
+        // De ontvanger ziet één mockup en kan een foto uploaden.
+        function ShareView({ token }) {
+            const [design, setDesign] = useState(null);
+            const [error, setError] = useState('');
+            const [uploading, setUploading] = useState(false);
+            const [uploaded, setUploaded] = useState(false);
+
+            // Public-action variant van apiCall (geen password header)
+            const sharePublicCall = async (action, payload) => {
+                const res = await fetch(FUNCTION_URL, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+                        'apikey': SUPABASE_ANON_KEY,
+                    },
+                    body: JSON.stringify({ action, payload }),
+                });
+                if (res.status === 410) throw new Error('Deze share-link is verlopen.');
+                if (res.status === 404) throw new Error('Deze share-link bestaat niet (meer).');
+                if (!res.ok) {
+                    const txt = await res.text().catch(() => '');
+                    throw new Error(`Server-fout: ${res.status} ${txt}`);
+                }
+                return await res.json();
+            };
+
+            useEffect(() => {
+                let cancelled = false;
+                (async () => {
+                    try {
+                        const d = await sharePublicCall('share-get-design', { share_token: token });
+                        if (cancelled) return;
+                        setDesign(d);
+                    } catch (e) {
+                        if (!cancelled) setError(e.message);
+                    }
+                })();
+                return () => { cancelled = true; };
+            }, [token]);
+
+            const handleUpload = async (e) => {
+                const file = e.target.files?.[0];
+                if (!file) return;
+                setUploading(true);
+                setError('');
+                try {
+                    const imageData = await fileToImageData(file);
+                    await sharePublicCall('share-set-image', { share_token: token, imageData });
+                    // Re-fetch design to show the new image
+                    const d = await sharePublicCall('share-get-design', { share_token: token });
+                    setDesign(d);
+                    setUploaded(true);
+                } catch (err) {
+                    setError(err.message);
+                }
+                setUploading(false);
+                e.target.value = '';
+            };
+
+            if (error) {
+                return (
+                    <div className="h-screen flex items-center justify-center bg-dark-900 p-4">
+                        <div className="bg-dark-800 border border-red-700/50 rounded-2xl p-8 max-w-sm text-center">
+                            <h1 className="text-xl font-bold text-red-300 mb-2">Oeps</h1>
+                            <p className="text-sm text-gray-400">{error}</p>
+                        </div>
+                    </div>
+                );
+            }
+
+            if (!design) {
+                return <div className="h-screen flex items-center justify-center text-gray-400 text-sm bg-dark-900">Mockup laden…</div>;
+            }
+
+            // Build content for CanvasPreview
+            return (
+                <div className="min-h-screen bg-dark-900 flex flex-col items-center justify-center p-6">
+                    <div className="max-w-md w-full text-center mb-6">
+                        <h1 className="text-xl font-bold bg-gradient-to-r from-blue-400 to-purple-400 bg-clip-text text-transparent">SocialFrame · gedeelde mockup</h1>
+                        {design.bulk_run_label && (
+                            <p className="text-xs text-gray-500 mt-1">Campagne: {design.bulk_run_label}</p>
+                        )}
+                        <p className="text-sm text-gray-400 mt-3">
+                            {design.awaiting_photo
+                                ? 'Upload een foto om deze mockup compleet te maken.'
+                                : uploaded
+                                    ? '✓ Foto toegevoegd. Bedankt!'
+                                    : "Foto al ingevuld. Je kunt 'm vervangen door een andere te uploaden."}
+                        </p>
+                    </div>
+
+                    <div className="max-w-md w-full bg-dark-800 rounded-2xl p-4 border border-white/5 mb-6">
+                        <CanvasPreview
+                            platformId={design.platform_id}
+                            formatId={design.format_id}
+                            content={design.content}
+                            style={design.style}
+                        />
+                    </div>
+
+                    <label className="bg-white text-black font-bold py-3 px-6 rounded-lg hover:bg-gray-200 cursor-pointer text-sm">
+                        {uploading ? 'Bezig met uploaden…' : (design.content?.mainImage ? 'Vervang foto' : 'Upload foto')}
+                        <input type="file" accept="image/*" onChange={handleUpload} disabled={uploading} className="hidden" />
+                    </label>
+                </div>
+            );
+        }
+
         // ============== APP ==============
         function App() {
+            // Check ?share=TOKEN op eerste render — als die er is, ga naar share-mode
+            // (geen password-gate, geen sidebar)
+            const [shareToken] = useState(() => {
+                if (typeof window === 'undefined') return null;
+                const url = new URL(window.location.href);
+                return url.searchParams.get('share');
+            });
+
             const [authed, setAuthed] = useState(false);
             const [authChecking, setAuthChecking] = useState(true);
 
             useEffect(() => {
+                if (shareToken) { setAuthChecking(false); return; }
                 const pw = localStorage.getItem(PW_STORAGE_KEY);
                 if (!pw) { setAuthChecking(false); return; }
-                // Verify password is still valid
-                apiCall('designs', 'list')
+                apiCall(DESIGNS_STORE, 'list')
                     .then(() => { setAuthed(true); setAuthChecking(false); })
                     .catch(() => { setAuthChecking(false); });
-            }, []);
+            }, [shareToken]);
+
+            if (shareToken) return <ShareView token={shareToken} />;
 
             if (authChecking) {
                 return <div className="h-screen flex items-center justify-center text-gray-400 text-sm">Verbinding maken…</div>;
@@ -1423,6 +1820,11 @@ Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
                 formatId: 'feed-4-5',
                 frame: 'shadow',
             });
+
+            // Gallery state (v3.1)
+            const [expandedRuns, setExpandedRuns] = useState(new Set());
+            const [shareModalDesign, setShareModalDesign] = useState(null);
+            const [galleryRefreshing, setGalleryRefreshing] = useState(false);
 
             const [content, setContent] = useState({
                 avatar: null,
@@ -1462,7 +1864,7 @@ Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
                 (async () => {
                     try {
                         const [d, b] = await Promise.all([
-                            apiCall('designs', 'list'),
+                            apiCall(DESIGNS_STORE, 'list'),
                             apiCall('brand_kits', 'list'),
                         ]);
                         setSavedDesigns(d.map(fromDbDesign));
@@ -1575,8 +1977,8 @@ Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
                     platformId, formatId, content, style
                 };
                 try {
-                    await apiCall('designs', 'save', toDbDesign(newDesign));
-                    const list = await apiCall('designs', 'list');
+                    await apiCall(DESIGNS_STORE, 'save', toDbDesign(newDesign));
+                    const list = await apiCall(DESIGNS_STORE, 'list');
                     setSavedDesigns(list.map(fromDbDesign));
                     setSidebarTab('library');
                 } catch (e) { alert('Opslaan mislukt: ' + e.message); }
@@ -1591,12 +1993,80 @@ Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
             };
 
             const deleteDesign = async (id, e) => {
-                e.stopPropagation();
+                if (e) e.stopPropagation();
                 try {
-                    await apiCall('designs', 'delete', { id: String(id) });
-                    const list = await apiCall('designs', 'list');
+                    await apiCall(DESIGNS_STORE, 'delete', { id: String(id) });
+                    const list = await apiCall(DESIGNS_STORE, 'list');
                     setSavedDesigns(list.map(fromDbDesign));
                 } catch (err) { alert('Verwijderen mislukt: ' + err.message); }
+            };
+
+            // Gallery helpers (v3.1)
+            const refreshGallery = async () => {
+                setGalleryRefreshing(true);
+                try {
+                    const list = await apiCall(DESIGNS_STORE, 'list');
+                    setSavedDesigns(list.map(fromDbDesign));
+                } catch (e) { console.error('refresh failed', e); }
+                setGalleryRefreshing(false);
+            };
+
+            const toggleRunExpand = (runId) => {
+                setExpandedRuns(prev => {
+                    const next = new Set(prev);
+                    if (next.has(runId)) next.delete(runId);
+                    else next.add(runId);
+                    return next;
+                });
+            };
+
+            const downloadDesignAsPng = async (d) => {
+                try {
+                    const canvas = await renderToCanvas({
+                        platformId: d.platformId, formatId: d.formatId,
+                        content: d.content, style: d.style,
+                    });
+                    canvas.toBlob((blob) => {
+                        const safeName = (d.content?.name || 'mockup').replace(/[^a-z0-9_-]/gi, '_');
+                        saveAs(blob, `${safeName}_${d.id}.png`);
+                    }, 'image/png');
+                } catch (e) { alert('Download mislukt: ' + e.message); }
+            };
+
+            const ensureShareToken = async (d) => {
+                if (d.shareToken) return d;
+                const token = (typeof crypto !== 'undefined' && crypto.randomUUID)
+                    ? crypto.randomUUID()
+                    : `tok-${Date.now()}-${Math.random().toString(36).slice(2, 18)}`;
+                const expires = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // 30 dagen
+                try {
+                    await apiCall(DESIGNS_STORE, 'save', toDbDesign({
+                        ...d, shareToken: token, shareExpiresAt: expires.toISOString(),
+                    }));
+                    await refreshGallery();
+                    return { ...d, shareToken: token, shareExpiresAt: expires.toISOString() };
+                } catch (e) { alert('Share-link aanmaken mislukt: ' + e.message); return d; }
+            };
+
+            const revokeShare = async (d) => {
+                if (!confirm('Share-link intrekken? De collega kan dan niet meer uploaden.')) return;
+                try {
+                    await apiCall(DESIGNS_STORE, 'save', toDbDesign({
+                        ...d, shareToken: null, shareExpiresAt: null,
+                    }));
+                    await refreshGallery();
+                    setShareModalDesign(null);
+                } catch (e) { alert('Revoken mislukt: ' + e.message); }
+            };
+
+            const deleteRun = async (runId, runLabel) => {
+                const designs = savedDesigns.filter(d => d.bulkRunId === runId);
+                if (!designs.length) return;
+                if (!confirm(`Run "${runLabel}" met ${designs.length} mockup(s) volledig verwijderen?`)) return;
+                try {
+                    await apiCall(DESIGNS_STORE, 'delete-many', { ids: designs.map(d => String(d.id)) });
+                    await refreshGallery();
+                } catch (e) { alert('Verwijderen mislukt: ' + e.message); }
             };
 
             // Single-shot PNG download — gebruikt dezelfde renderToCanvas als de preview
@@ -1668,7 +2138,7 @@ Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
                         </div>
 
                         <div className="flex border-b border-white/10 flex-shrink-0">
-                            {[['edit', 'Edit'], ['library', 'Library'], ['brands', 'Brands'], ['bulk', 'Bulk'], ['export', 'Export']].map(([id, label]) => (
+                            {[['edit', 'Edit'], ['library', 'Gallery'], ['brands', 'Brands'], ['bulk', 'Bulk'], ['export', 'Export']].map(([id, label]) => (
                                 <button key={id} onClick={() => setSidebarTab(id)}
                                     className={`flex-1 py-3 text-xs font-medium transition-colors ${sidebarTab === id ? 'text-white border-b-2 border-blue-500' : 'text-gray-500 hover:text-gray-300'}`}>
                                     {label}
@@ -1872,26 +2342,18 @@ Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
                         )}
 
                         {sidebarTab === 'library' && (
-                            <div className="p-4 space-y-3 animate-fade-in flex-grow overflow-y-auto">
-                                {savedDesigns.length === 0 ? (
-                                    <div className="text-center text-gray-500 py-10 text-sm">Nog geen ontwerpen.</div>
-                                ) : savedDesigns.map(d => (
-                                    <div key={d.id} onClick={() => loadDesign(d)}
-                                        className="bg-dark-700 border border-white/5 rounded-lg p-3 cursor-pointer hover:border-blue-500 flex gap-3 group">
-                                        <div className="w-12 h-12 rounded bg-gray-800 flex-shrink-0 overflow-hidden">
-                                            {d.content.mainImage ? <img src={d.content.mainImage.src} className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center text-gray-600"><Icons.Image /></div>}
-                                        </div>
-                                        <div className="flex-1 min-w-0">
-                                            <div className="flex justify-between">
-                                                <span className="text-[10px] font-bold text-gray-400 uppercase">{PLATFORMS[d.platformId]?.name || 'Feed'}</span>
-                                                <button onClick={e => deleteDesign(d.id, e)} className="text-gray-500 hover:text-red-400"><Icons.Trash /></button>
-                                            </div>
-                                            <p className="text-sm font-medium truncate">{d.content.name}</p>
-                                            <p className="text-[10px] text-gray-500">{d.date}</p>
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
+                            <GalleryPanel
+                                designs={savedDesigns}
+                                expandedRuns={expandedRuns}
+                                toggleRunExpand={toggleRunExpand}
+                                onLoad={loadDesign}
+                                onDelete={(id) => deleteDesign(id)}
+                                onDeleteRun={deleteRun}
+                                onShare={(d) => setShareModalDesign(d)}
+                                onDownload={downloadDesignAsPng}
+                                onRefresh={refreshGallery}
+                                refreshing={galleryRefreshing}
+                            />
                         )}
 
                         {sidebarTab === 'brands' && (
@@ -1928,6 +2390,14 @@ Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
                                 setDefaults={setBulkDefaults}
                                 mode={bulkMode}
                                 setMode={setBulkMode}
+                                onMockupsAdded={async () => {
+                                    // Re-fetch gallery contents en spring naar Library/Gallery-tab
+                                    try {
+                                        const list = await apiCall('designs_v3', 'list');
+                                        setSavedDesigns(list.map(fromDbDesign));
+                                        setSidebarTab('library');
+                                    } catch (e) { console.error('refresh failed', e); }
+                                }}
                             />
                         )}
 
@@ -1986,6 +2456,15 @@ Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
                     >
                         <CanvasPreview platformId={platformId} formatId={formatId} content={content} style={style} />
                     </main>
+
+                    {shareModalDesign && (
+                        <ShareModal
+                            design={shareModalDesign}
+                            onClose={() => setShareModalDesign(null)}
+                            onEnsureToken={ensureShareToken}
+                            onRevoke={revokeShare}
+                        />
+                    )}
                 </div>
             );
         }
