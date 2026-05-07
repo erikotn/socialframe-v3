@@ -66,6 +66,17 @@
             'story-9-16': { name: 'Story / Reel (9:16)',     imgAspect: 16 / 9, isStory: true },
         };
 
+        // Aanbevolen image-dimensies per format — getoond in share-views als
+        // hint voor de collega die een foto upload. Hardgecodeerd op de meest
+        // gangbare standaard-formaten i.p.v. afgeleid van imgAspect (zodat we
+        // gangbare maten als 1200×627 i.p.v. 1080×565 tonen).
+        const RECOMMENDED_DIMENSIONS = {
+            'feed-4-5':   '1080 × 1350 px',
+            'feed-1-1':   '1080 × 1080 px',
+            'feed-1-91':  '1200 × 627 px',
+            'story-9-16': '1080 × 1920 px',
+        };
+
         const PLATFORMS = {
             linkedin: {
                 name: 'LinkedIn',
@@ -2219,6 +2230,12 @@ Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
                         </p>
                     </div>
 
+                    {RECOMMENDED_DIMENSIONS[design.format_id] && (
+                        <div className="max-w-md w-full text-center text-xs text-gray-500 mb-2">
+                            Aanbevolen foto-formaat: <span className="text-gray-300 font-medium">{RECOMMENDED_DIMENSIONS[design.format_id]}</span>
+                        </div>
+                    )}
+
                     <div className="max-w-md w-full bg-dark-800 rounded-2xl p-4 border border-white/5 mb-6">
                         <CanvasPreview
                             platformId={design.platform_id}
@@ -2360,6 +2377,11 @@ Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
                             const isUploading = uploadingId === d.id;
                             return (
                                 <div key={d.id} className="bg-dark-800 rounded-xl p-3 border border-white/5">
+                                    {RECOMMENDED_DIMENSIONS[d.format_id] && (
+                                        <div className="text-[10px] text-gray-500 mb-1.5 text-center">
+                                            Aanbevolen: <span className="text-gray-300 font-medium">{RECOMMENDED_DIMENSIONS[d.format_id]}</span>
+                                        </div>
+                                    )}
                                     <div className="mb-3">
                                         <CanvasPreview
                                             platformId={d.platform_id}
