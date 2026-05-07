@@ -998,10 +998,13 @@
                 mainImage = sharedImage;
             }
 
+            // Sender-name + avatar + verified komen ALTIJD uit de brand-kit.
+            // 'naam' in TSV is een variant-label (filename + validatie-preview),
+            // niet de afzendernaam in de mockup.
             const content = {
                 avatar: brand?.avatar || null,
                 mainImage,
-                name: f.naam || brand?.senderName || brand?.name || 'Brand',
+                name: brand?.senderName || brand?.name || 'Brand',
                 text: f.posttekst || '',
                 headline: f.headline || '',
                 buttonText: f.knop || 'Lees meer',
@@ -1032,14 +1035,22 @@
 Brand: ${brandName} | Platform: ${simpleDefaults.platformId} | Format: ${simpleDefaults.formatId}
 
 Headers (verplicht in deze volgorde, gescheiden door tabs):
-${BULK_HEADERS_SIMPLE.join('\\t')}
+${BULK_HEADERS_SIMPLE.join('\t')}
 
-Vul image_filename leeg, en voor elke rij:
-- image_description: korte briefing voor de vormgever ("Stockphoto: ...")
-- image_text: de zin/quote die in/op het beeld komt (1-2 regels, max 80 tekens)
+Kolommen-uitleg:
+- naam = variant-label (verschijnt alleen in de bestandsnaam, NIET als afzender in de mockup). Bv. "Concept_1_Post_1" of "Variant_A".
+- posttekst = de tekst boven de foto in de post
+- headline = vetgedrukte titel onder de foto in het CTA-blok
+- knop = knop-tekst (bv. "Lees meer")
+- url = website-URL onder de headline (laat leeg om brand-URL te gebruiken)
+- image_filename = laat leeg in deze batch
+- image_description = korte briefing voor de vormgever ("Stockphoto: ...")
+- image_text = de zin/quote die in/op het beeld komt (1-2 regels, max 80 tekens)
 
 Variaties: telkens een andere headline-angle voor de campagne.
 Posttekst max 80 woorden, headline max 60 tekens, knop = "Lees meer".
+
+Afzendernaam en avatar komen automatisch uit de brand-kit (${brandName}) — niet zelf invullen.
 
 Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
             }
@@ -1047,15 +1058,19 @@ Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
             return `Genereer 20 SocialFrame-mockup-varianten als TSV (tabs als scheidingsteken).
 
 Headers (verplicht in deze volgorde, gescheiden door tabs):
-${BULK_HEADERS_ADVANCED.join('\\t')}
+${BULK_HEADERS_ADVANCED.join('\t')}
 
 Beschikbare brands: ${brandsList || '<vul handmatig>'}
 Beschikbare platforms: linkedin, meta, instagram, tiktok
 Beschikbare formats: feed-4-5, feed-1-1, feed-1-91, story-9-16
 Frame: shadow / outline / none
 
-Vul image_filename leeg of zet een filename die de gebruiker apart upload.
-image_description = briefing voor vormgever, image_text = tekst die op het beeld komt.
+Kolommen-uitleg:
+- brand = brand-kit-naam (afzender + avatar komen daaruit)
+- naam = variant-label (alleen voor bestandsnaam)
+- image_filename = laat leeg of zet een filename die apart wordt geupload
+- image_description = briefing voor de vormgever
+- image_text = tekst die op het beeld komt
 
 Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
         };
@@ -1135,8 +1150,9 @@ Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
                             content, style,
                         });
                         const blob = await new Promise(res => canvas.toBlob(res, 'image/png'));
-                        const safeName = (content.name || `row-${row.rowNum}`).replace(/[^a-z0-9_-]/gi, '_');
-                        const filename = `${String(i + 1).padStart(3, '0')}_${safeName}_${row.platformId}_${row.formatId}.png`;
+                        // Filename gebruikt de TSV-naam als variant-label (bv. "Concept_1_Post_1_Variant_1")
+                        const variantLabel = (row.fields.naam || content.name || `row-${row.rowNum}`).replace(/[^a-z0-9_-]/gi, '_');
+                        const filename = `${String(i + 1).padStart(3, '0')}_${variantLabel}_${row.platformId}_${row.formatId}.png`;
                         zip.file(filename, blob);
                         reportLines.push(`OK   row ${row.rowNum} → ${filename}`);
                         if (row.warnings.length) reportLines.push(`     warnings: ${row.warnings.join('; ')}`);
@@ -1198,6 +1214,20 @@ Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
                                     <option value="">— kies brand —</option>
                                     {brandKits.map(k => <option key={k.id} value={k.id}>{k.name || k.senderName}</option>)}
                                 </select>
+                                {defaults.brand && (
+                                    <div className="flex items-center gap-2 mt-2 text-[10px] text-gray-400 bg-dark-800 rounded px-2 py-1.5 border border-white/5">
+                                        <div className="w-6 h-6 rounded-full bg-dark-700 overflow-hidden flex-shrink-0">
+                                            {defaults.brand.avatar?.src ? <img src={defaults.brand.avatar.src} className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center text-gray-600 text-[8px]">?</div>}
+                                        </div>
+                                        <div className="flex-1 min-w-0">
+                                            <div className="truncate text-gray-300">{defaults.brand.senderName || defaults.brand.name}</div>
+                                            <div className="truncate text-[9px] text-gray-500">{defaults.brand.url || '(geen url)'}</div>
+                                        </div>
+                                        {!defaults.brand.avatar?.src && (
+                                            <span className="text-yellow-400 text-[9px] flex-shrink-0" title="Brand-kit heeft geen avatar opgeslagen — open de Brands-tab om er een te uploaden">⚠ geen avatar</span>
+                                        )}
+                                    </div>
+                                )}
                             </div>
                             <div className="grid grid-cols-2 gap-2">
                                 <div>
