@@ -979,7 +979,10 @@
         function CanvasPreview({ platformId, formatId, content, style, onEditField }) {
             const [src, setSrc] = useState(null);
             const imgRef = useRef(null);
-            const [imgRect, setImgRect] = useState({ w: 0, h: 0 });
+            // x/y zijn de img's positie-offset binnen de positioned ancestor (de
+            // <main>); w/h zijn de gerenderde img-dimensies. Wordt geüpdatet via
+            // ResizeObserver + getBoundingClientRect.
+            const [imgRect, setImgRect] = useState({ x: 0, y: 0, w: 0, h: 0 });
 
             useEffect(() => {
                 let cancelled = false;
@@ -993,16 +996,30 @@
                 return () => { cancelled = true; };
             }, [platformId, formatId, content, style]);
 
-            // Tracker voor de gerenderde img-grootte zodat hotspots in pixels
-            // kloppen ongeacht hoe de img schaalt naar max-w/h-full.
             useEffect(() => {
                 if (!imgRef.current || !onEditField) return;
                 const el = imgRef.current;
-                const update = () => setImgRect({ w: el.offsetWidth, h: el.offsetHeight });
+                const update = () => {
+                    if (!el.offsetParent) return; // niet zichtbaar
+                    const r = el.getBoundingClientRect();
+                    const pr = el.offsetParent.getBoundingClientRect();
+                    setImgRect({
+                        x: r.left - pr.left,
+                        y: r.top - pr.top,
+                        w: r.width,
+                        h: r.height,
+                    });
+                };
                 update();
                 const ro = new ResizeObserver(update);
                 ro.observe(el);
-                return () => ro.disconnect();
+                window.addEventListener('resize', update);
+                window.addEventListener('scroll', update, true);
+                return () => {
+                    ro.disconnect();
+                    window.removeEventListener('resize', update);
+                    window.removeEventListener('scroll', update, true);
+                };
             }, [src, onEditField]);
 
             if (!src) return <div className="text-gray-500 text-sm">Mockup wordt opgebouwd…</div>;
@@ -1010,40 +1027,47 @@
             const layout = PLATFORMS[platformId]?.layout;
             const hotspots = onEditField ? (EDIT_HOTSPOTS[layout] || []) : [];
 
-            // Zonder hotspots: behoud de oude (werkende) layout — losse img die
-            // direct flex-item is van de main, zodat max-w/h-full juist werkt.
+            // Zonder hotspots: losse img zoals voorheen, max-w/h-full vanuit
+            // de main flex-parent doet z'n werk en de aspect ratio klopt.
             if (!hotspots.length) {
                 return <img src={src} className="max-w-full max-h-full" alt="Mockup preview" />;
             }
 
-            // Met hotspots: inline-flex shrink-naar-content wrapper, en hotspots
-            // krijgen pixel-coords berekend uit imgRect.
+            // Met hotspots: img blijft een directe flex-item van main (sizing
+            // werkt correct, geen stretch). Hotspots zijn siblings via Fragment,
+            // absoluut gepositioneerd in main's coordinatensysteem op basis
+            // van de gemeten img-rect.
+            const onLoadUpdate = () => {
+                const el = imgRef.current;
+                if (!el || !el.offsetParent) return;
+                const r = el.getBoundingClientRect();
+                const pr = el.offsetParent.getBoundingClientRect();
+                setImgRect({ x: r.left - pr.left, y: r.top - pr.top, w: r.width, h: r.height });
+            };
             return (
-                <div style={{
-                    position: 'relative', display: 'inline-flex',
-                    maxWidth: '100%', maxHeight: '100%', minWidth: 0, minHeight: 0,
-                }}>
-                    <img ref={imgRef} src={src}
-                        onLoad={() => imgRef.current && setImgRect({ w: imgRef.current.offsetWidth, h: imgRef.current.offsetHeight })}
-                        className="max-w-full max-h-full block" alt="Mockup preview" />
+                <>
+                    <img ref={imgRef} src={src} className="max-w-full max-h-full block" alt="Mockup preview"
+                        onLoad={onLoadUpdate} />
                     {imgRect.w > 0 && hotspots.map(h => (
                         <button key={h.field}
                             type="button"
                             onClick={() => onEditField(h.field)}
                             title={`Bewerk ${h.label}`}
-                            className="absolute group cursor-pointer hover:bg-blue-500/15 transition-colors"
+                            className="group cursor-pointer hover:bg-blue-500/15 transition-colors"
                             style={{
-                                top: h.top * imgRect.h,
-                                left: h.left * imgRect.w,
+                                position: 'absolute',
+                                top: imgRect.y + h.top * imgRect.h,
+                                left: imgRect.x + h.left * imgRect.w,
                                 width: (h.right - h.left) * imgRect.w,
                                 height: (h.bottom - h.top) * imgRect.h,
+                                zIndex: 10,
                             }}>
                             <span className="opacity-0 group-hover:opacity-100 transition-opacity bg-blue-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded absolute top-1 left-1 whitespace-nowrap pointer-events-none">
                                 ✏ {h.label}
                             </span>
                         </button>
                     ))}
-                </div>
+                </>
             );
         }
 
@@ -3057,7 +3081,12 @@ Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
                                             </div>
                                         </div>
                                         <div className="flex-[3]">
-                                            <label className="block text-[11px] text-gray-400 mb-1">Foto · sleep · Cmd+V</label>
+                                            <label className="flex items-center justify-between text-[11px] text-gray-400 mb-1">
+                                                <span>Foto · sleep · Cmd+V</span>
+                                                {RECOMMENDED_DIMENSIONS[formatId] && (
+                                                    <span className="text-[10px] text-gray-500">{RECOMMENDED_DIMENSIONS[formatId]}</span>
+                                                )}
+                                            </label>
                                             <div className="relative">
                                                 <label className="w-full h-24 bg-dark-900 border border-dashed border-gray-600 rounded-lg flex flex-col items-center justify-center cursor-pointer hover:border-blue-500 overflow-hidden">
                                                     {content.mainImage ? <img src={content.mainImage.src} className="w-full h-full object-cover opacity-50" /> : (
