@@ -1030,7 +1030,7 @@
         const buildClaudePrompt = (mode, simpleDefaults, brandKits) => {
             const brandName = simpleDefaults.brand?.name || simpleDefaults.brand?.senderName || '<brand>';
             if (mode === 'simple') {
-                return `Genereer 20 SocialFrame-mockup-varianten als TSV (tabs als scheidingsteken).
+                return `Genereer SocialFrame-mockup-varianten als TSV (tabs als scheidingsteken).
 
 Brand: ${brandName} | Platform: ${simpleDefaults.platformId} | Format: ${simpleDefaults.formatId}
 
@@ -1055,7 +1055,7 @@ Afzendernaam en avatar komen automatisch uit de brand-kit (${brandName}) — nie
 Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
             }
             const brandsList = brandKits.map(k => k.name || k.senderName).filter(Boolean).join(', ');
-            return `Genereer 20 SocialFrame-mockup-varianten als TSV (tabs als scheidingsteken).
+            return `Genereer SocialFrame-mockup-varianten als TSV (tabs als scheidingsteken).
 
 Headers (verplicht in deze volgorde, gescheiden door tabs):
 ${BULK_HEADERS_ADVANCED.join('\t')}
