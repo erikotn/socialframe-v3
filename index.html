@@ -1096,7 +1096,30 @@ Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
         // Toont opgeslagen mockups gegroepeerd per bulk-run. Ungrouped (single
         // saves zonder bulk_run_id) staan bovenaan. Per item: status-badge,
         // share-knop, download-knop, delete-knop.
-        function GalleryPanel({ designs, expandedRuns, toggleRunExpand, onLoad, onDelete, onDeleteRun, onShare, onShareRun, onDownload, onRefresh, refreshing }) {
+        function GalleryPanel({ designs, expandedRuns, toggleRunExpand, onLoad, onDelete, onDeleteRun, onShare, onShareRun, onDownload, onRefresh, refreshing, onShareSelection, onMoveSelection, onDeleteSelection }) {
+            // Multi-select binnen de gallery: een willekeurige selectie kan
+            // verwijderd, verplaatst, of als één share-link gedeeld worden.
+            const [selectedIds, setSelectedIds] = useState(new Set());
+
+            const toggleSelect = (id) => {
+                setSelectedIds(prev => {
+                    const next = new Set(prev);
+                    if (next.has(id)) next.delete(id); else next.add(id);
+                    return next;
+                });
+            };
+
+            const toggleSelectRun = (g) => {
+                setSelectedIds(prev => {
+                    const next = new Set(prev);
+                    const allSelected = g.items.every(i => next.has(i.id));
+                    if (allSelected) for (const i of g.items) next.delete(i.id);
+                    else for (const i of g.items) next.add(i.id);
+                    return next;
+                });
+            };
+
+            const clearSelection = () => setSelectedIds(new Set());
             // Group designs by bulkRunId
             const groups = useMemo(() => {
                 const ungrouped = [];
@@ -1133,34 +1156,40 @@ Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
                 return null;
             };
 
-            const renderItem = (d) => (
-                <div key={d.id} className="bg-dark-700 border border-white/5 rounded-lg p-2.5 hover:border-blue-500 transition-colors">
-                    <div className="flex gap-2.5">
-                        <div onClick={() => onLoad(d)} className="w-12 h-12 rounded bg-gray-800 flex-shrink-0 overflow-hidden cursor-pointer">
-                            {d.content?.mainImage?.src ? (
-                                <img src={d.content.mainImage.src} className="w-full h-full object-cover" />
-                            ) : (
-                                <div className="w-full h-full flex items-center justify-center text-gray-600 text-[8px]">
-                                    {d.awaitingPhoto ? '📷' : <Icons.Image />}
-                                </div>
-                            )}
-                        </div>
-                        <div className="flex-1 min-w-0" onClick={() => onLoad(d)} style={{ cursor: 'pointer' }}>
-                            <div className="flex items-center gap-1.5 mb-0.5">
-                                <span className="text-[9px] font-bold text-gray-400 uppercase">{PLATFORMS[d.platformId]?.name || 'Feed'}</span>
-                                <Badge d={d} />
+            const renderItem = (d) => {
+                const isSelected = selectedIds.has(d.id);
+                return (
+                    <div key={d.id} className={`bg-dark-700 border rounded-lg p-2.5 transition-colors ${isSelected ? 'border-blue-500 bg-blue-900/10' : 'border-white/5 hover:border-blue-500'}`}>
+                        <div className="flex gap-2.5 items-start">
+                            <input type="checkbox" checked={isSelected}
+                                onChange={() => toggleSelect(d.id)}
+                                className="mt-1 flex-shrink-0 cursor-pointer" />
+                            <div onClick={() => onLoad(d)} className="w-12 h-12 rounded bg-gray-800 flex-shrink-0 overflow-hidden cursor-pointer">
+                                {d.content?.mainImage?.src ? (
+                                    <img src={d.content.mainImage.src} className="w-full h-full object-cover" />
+                                ) : (
+                                    <div className="w-full h-full flex items-center justify-center text-gray-600 text-[8px]">
+                                        {d.awaitingPhoto ? '📷' : <Icons.Image />}
+                                    </div>
+                                )}
                             </div>
-                            <p className="text-xs font-medium truncate">{d.content?.headline || d.content?.text?.slice(0, 40) || d.content?.name || '(leeg)'}</p>
-                            <p className="text-[10px] text-gray-500 truncate">{d.content?.name}</p>
+                            <div className="flex-1 min-w-0" onClick={() => onLoad(d)} style={{ cursor: 'pointer' }}>
+                                <div className="flex items-center gap-1.5 mb-0.5">
+                                    <span className="text-[9px] font-bold text-gray-400 uppercase">{PLATFORMS[d.platformId]?.name || 'Feed'}</span>
+                                    <Badge d={d} />
+                                </div>
+                                <p className="text-xs font-medium truncate">{d.content?.headline || d.content?.text?.slice(0, 40) || d.content?.name || '(leeg)'}</p>
+                                <p className="text-[10px] text-gray-500 truncate">{d.content?.name}</p>
+                            </div>
+                        </div>
+                        <div className="flex gap-1 mt-2 text-[10px]">
+                            <button onClick={() => onShare(d)} className="flex-1 bg-dark-800 hover:bg-dark-900 px-2 py-1 rounded text-gray-300">🔗 Deel</button>
+                            <button onClick={() => onDownload(d)} className="flex-1 bg-dark-800 hover:bg-dark-900 px-2 py-1 rounded text-gray-300">⬇ PNG</button>
+                            <button onClick={() => { if (confirm('Mockup verwijderen?')) onDelete(d.id); }} className="bg-dark-800 hover:bg-red-900/50 px-2 py-1 rounded text-gray-500 hover:text-red-300">🗑</button>
                         </div>
                     </div>
-                    <div className="flex gap-1 mt-2 text-[10px]">
-                        <button onClick={() => onShare(d)} className="flex-1 bg-dark-800 hover:bg-dark-900 px-2 py-1 rounded text-gray-300">🔗 Deel</button>
-                        <button onClick={() => onDownload(d)} className="flex-1 bg-dark-800 hover:bg-dark-900 px-2 py-1 rounded text-gray-300">⬇ PNG</button>
-                        <button onClick={() => { if (confirm('Mockup verwijderen?')) onDelete(d.id); }} className="bg-dark-800 hover:bg-red-900/50 px-2 py-1 rounded text-gray-500 hover:text-red-300">🗑</button>
-                    </div>
-                </div>
-            );
+                );
+            };
 
             return (
                 <div className="p-4 space-y-3 animate-fade-in flex-grow overflow-y-auto">
@@ -1194,10 +1223,16 @@ Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
                     {groups.runs.map(g => {
                         const isOpen = expandedRuns.has(g.runId);
                         const awaiting = g.items.filter(i => i.awaitingPhoto).length;
+                        const allSelected = g.items.length > 0 && g.items.every(i => selectedIds.has(i.id));
                         return (
                             <div key={g.runId} className="bg-dark-900/50 rounded-lg border border-white/5 overflow-hidden">
                                 <div className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-dark-700/50"
                                     onClick={() => toggleRunExpand(g.runId)}>
+                                    <input type="checkbox" checked={allSelected}
+                                        onChange={(e) => { e.stopPropagation(); toggleSelectRun(g); }}
+                                        onClick={(e) => e.stopPropagation()}
+                                        title="Selecteer hele collectie"
+                                        className="cursor-pointer" />
                                     <span className="text-gray-400 text-[10px]">{isOpen ? '▼' : '▶'}</span>
                                     <div className="flex-1 min-w-0">
                                         <div className="text-sm font-medium truncate">{g.label}</div>
@@ -1219,6 +1254,112 @@ Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
                             </div>
                         );
                     })}
+
+                    {/* Floating action bar voor selectie (v3.1.2) */}
+                    {selectedIds.size > 0 && (
+                        <div className="sticky bottom-0 -mx-4 -mb-4 px-4 py-3 bg-dark-700 border-t border-blue-500/50 shadow-2xl">
+                            <div className="text-[11px] text-gray-300 mb-2">
+                                {selectedIds.size} geselecteerd
+                            </div>
+                            <div className="grid grid-cols-2 gap-1.5">
+                                <button onClick={() => onShareSelection(Array.from(selectedIds))}
+                                    className="bg-blue-600 hover:bg-blue-500 text-white font-bold py-1.5 rounded text-[11px]">🔗 Deel selectie</button>
+                                <button onClick={() => onMoveSelection(Array.from(selectedIds), () => clearSelection())}
+                                    className="bg-purple-600 hover:bg-purple-500 text-white font-bold py-1.5 rounded text-[11px]">📁 Verplaats…</button>
+                                <button onClick={async () => { await onDeleteSelection(Array.from(selectedIds)); clearSelection(); }}
+                                    className="bg-red-600/70 hover:bg-red-600 text-white font-bold py-1.5 rounded text-[11px]">🗑 Verwijder</button>
+                                <button onClick={clearSelection}
+                                    className="bg-dark-900 hover:bg-dark-800 text-gray-300 font-bold py-1.5 rounded text-[11px]">Deselect</button>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        // ============== MOVE COLLECTION MODAL (v3.1.2) ==============
+        // Verplaats geselecteerde mockups naar nieuwe of bestaande collectie.
+        function MoveCollectionModal({ ids, designs, onClose, onMove }) {
+            const [mode, setMode] = useState('new'); // 'new' | 'existing'
+            const [newLabel, setNewLabel] = useState('');
+            const [existingRunId, setExistingRunId] = useState('');
+            const [busy, setBusy] = useState(false);
+
+            // Build list of existing collections
+            const collections = useMemo(() => {
+                const seen = new Map();
+                for (const d of designs) {
+                    if (d.bulkRunId && !seen.has(d.bulkRunId)) {
+                        seen.set(d.bulkRunId, d.bulkRunLabel || d.bulkRunId);
+                    }
+                }
+                return Array.from(seen.entries()).map(([id, label]) => ({ id, label }));
+            }, [designs]);
+
+            const submit = async () => {
+                setBusy(true);
+                if (mode === 'new') {
+                    if (!newLabel.trim()) { alert('Vul een naam in.'); setBusy(false); return; }
+                    await onMove(ids, { type: 'new', label: newLabel.trim() });
+                } else {
+                    if (!existingRunId) { alert('Kies een collectie.'); setBusy(false); return; }
+                    await onMove(ids, { type: 'existing', runId: existingRunId });
+                }
+                setBusy(false);
+                onClose();
+            };
+
+            return (
+                <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4" onClick={onClose}>
+                    <div className="bg-dark-800 border border-white/10 rounded-2xl p-6 w-full max-w-md space-y-4 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+                        <div>
+                            <h3 className="text-lg font-bold">Verplaats {ids.length} mockup{ids.length === 1 ? '' : 's'}</h3>
+                            <p className="text-xs text-gray-400 mt-1">
+                                Naar een nieuwe of bestaande collectie. Run-share-tokens worden gereset bij verplaatsen.
+                            </p>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-1 bg-dark-900 p-1 rounded-lg border border-white/5">
+                            <button onClick={() => setMode('new')}
+                                className={`py-1.5 text-xs font-medium rounded-md ${mode === 'new' ? 'bg-dark-700 text-white shadow' : 'text-gray-500 hover:text-gray-300'}`}>
+                                Nieuwe collectie
+                            </button>
+                            <button onClick={() => setMode('existing')}
+                                disabled={collections.length === 0}
+                                className={`py-1.5 text-xs font-medium rounded-md disabled:opacity-30 ${mode === 'existing' ? 'bg-dark-700 text-white shadow' : 'text-gray-500 hover:text-gray-300'}`}>
+                                Bestaande collectie
+                            </button>
+                        </div>
+
+                        {mode === 'new' && (
+                            <div>
+                                <label className="block text-[11px] text-gray-400 mb-1">Naam nieuwe collectie</label>
+                                <input type="text" value={newLabel} autoFocus
+                                    onChange={(e) => setNewLabel(e.target.value)}
+                                    placeholder="Bv. Cosis februari 2026"
+                                    className="w-full bg-dark-900 border border-gray-700 rounded px-2 py-2 text-sm" />
+                            </div>
+                        )}
+
+                        {mode === 'existing' && (
+                            <div>
+                                <label className="block text-[11px] text-gray-400 mb-1">Bestaande collectie</label>
+                                <select value={existingRunId} onChange={(e) => setExistingRunId(e.target.value)}
+                                    className="w-full bg-dark-900 border border-gray-700 rounded px-2 py-2 text-sm">
+                                    <option value="">— kies collectie —</option>
+                                    {collections.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
+                                </select>
+                            </div>
+                        )}
+
+                        <div className="flex gap-2 pt-2 border-t border-white/5">
+                            <button onClick={onClose} className="text-[11px] text-gray-400 hover:text-gray-200">Annuleer</button>
+                            <button onClick={submit} disabled={busy}
+                                className="ml-auto bg-white text-black text-sm font-bold py-1.5 px-4 rounded hover:bg-gray-200 disabled:opacity-50">
+                                {busy ? 'Bezig…' : 'Verplaats'}
+                            </button>
+                        </div>
+                    </div>
                 </div>
             );
         }
@@ -1313,6 +1454,15 @@ Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
             const [copied, setCopied] = useState(false);
 
             useEffect(() => {
+                // Prefilled case: selectie-share heeft de token al gegenereerd.
+                if (runInfo.prefilledToken) {
+                    setResolved({
+                        token: runInfo.prefilledToken,
+                        expiresAt: runInfo.prefilledExpires,
+                        runLabel: runInfo.runLabel,
+                    });
+                    return;
+                }
                 let cancelled = false;
                 (async () => {
                     const r = await onEnsureRunToken(runInfo.runId, runInfo.runLabel);
@@ -1367,9 +1517,9 @@ Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
                                     Verloopt op: <span className="text-gray-300">{expiresStr}</span>
                                 </div>
                                 <div className="flex gap-2 pt-2 border-t border-white/5">
-                                    <button onClick={() => onRevokeRun(runInfo.runId)}
+                                    <button onClick={() => onRevokeRun(resolved?.token)}
                                         className="text-[11px] text-red-400 hover:text-red-300">
-                                        Run-token intrekken
+                                        Token intrekken
                                     </button>
                                     <button onClick={onClose}
                                         className="ml-auto bg-gray-700 hover:bg-gray-600 text-white text-sm font-bold py-1.5 px-4 rounded">
@@ -2032,6 +2182,12 @@ Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
             const [shareModalDesign, setShareModalDesign] = useState(null);
             const [shareModalRun, setShareModalRun] = useState(null); // {runId, runLabel}
             const [galleryRefreshing, setGalleryRefreshing] = useState(false);
+            const [moveModalState, setMoveModalState] = useState(null); // {ids: [...], onDone}
+
+            // Save-to-collection (v3.1.2) — Edit-tab Save knop
+            // saveTargetMode: '' (losse mockup) | '__new__' (nieuwe collectie) | runId (bestaand)
+            const [saveTargetMode, setSaveTargetMode] = useState('');
+            const [newCollectionName, setNewCollectionName] = useState('');
 
             const [content, setContent] = useState({
                 avatar: null,
@@ -2178,8 +2334,32 @@ Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
 
             // Designs library (cloud)
             const saveDesign = async () => {
-                // Auto-detect "wacht op foto"-status zodat handmatige saves ook
-                // het juiste badge in de gallery krijgen.
+                // Resolve waar de mockup naartoe moet:
+                //   '' = losse mockup (geen bulk_run_id)
+                //   '__new__' = nieuwe collectie met newCollectionName als label
+                //   <runId> = toevoegen aan bestaande collectie
+                let bulkRunId = null;
+                let bulkRunLabel = null;
+                if (saveTargetMode === '__new__') {
+                    if (!newCollectionName.trim()) {
+                        alert('Vul een naam in voor de nieuwe collectie.');
+                        return;
+                    }
+                    bulkRunId = (typeof crypto !== 'undefined' && crypto.randomUUID)
+                        ? crypto.randomUUID()
+                        : `run-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+                    bulkRunLabel = newCollectionName.trim();
+                } else if (saveTargetMode) {
+                    // Bestaande collectie — haal label op uit savedDesigns
+                    const existing = savedDesigns.find(d => d.bulkRunId === saveTargetMode);
+                    if (!existing) {
+                        alert('Kon bestaande collectie niet vinden — kies opnieuw.');
+                        return;
+                    }
+                    bulkRunId = saveTargetMode;
+                    bulkRunLabel = existing.bulkRunLabel;
+                }
+
                 const hasBriefing = (content.imageDescription && content.imageDescription.trim())
                     || (content.imageText && content.imageText.trim());
                 const awaitingPhoto = !content.mainImage && !!hasBriefing;
@@ -2187,12 +2367,14 @@ Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
                     id: Date.now(),
                     date: new Date().toLocaleDateString() + ' ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
                     platformId, formatId, content, style,
-                    awaitingPhoto,
+                    awaitingPhoto, bulkRunId, bulkRunLabel,
                 };
                 try {
                     await apiCall(DESIGNS_STORE, 'save', toDbDesign(newDesign));
                     const list = await apiCall(DESIGNS_STORE, 'list');
                     setSavedDesigns(list.map(fromDbDesign));
+                    // Reset only de "nieuwe collectie"-naam; behoud target-mode
+                    if (saveTargetMode === '__new__') setNewCollectionName('');
                     setSidebarTab('library');
                 } catch (e) { alert('Opslaan mislukt: ' + e.message); }
             };
@@ -2313,9 +2495,13 @@ Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
                 }
             };
 
-            const revokeRunShare = async (runId) => {
-                if (!confirm('Run-share-link intrekken?')) return;
-                const designs = savedDesigns.filter(d => d.bulkRunId === runId);
+            // Trekt een run/selectie-share-token in. Werkt voor zowel echte
+            // bulk-runs (via bulkRunId-lookup) als voor losse selectie-shares
+            // (waar het token op willekeurige rows staat).
+            const revokeRunShare = async (token) => {
+                if (!token) return;
+                if (!confirm('Share-link intrekken?')) return;
+                const designs = savedDesigns.filter(d => d.runShareToken === token);
                 try {
                     for (const d of designs) {
                         await apiCall(DESIGNS_STORE, 'save', toDbDesign({
@@ -2325,6 +2511,85 @@ Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
                     await refreshGallery();
                     setShareModalRun(null);
                 } catch (e) { alert('Revoken mislukt: ' + e.message); }
+            };
+
+            // Selection actions (v3.1.2) — werken op een willekeurige set design-IDs
+            const deleteSelection = async (ids) => {
+                if (!ids.length) return;
+                if (!confirm(`${ids.length} mockup${ids.length === 1 ? '' : 's'} verwijderen?`)) return;
+                try {
+                    await apiCall(DESIGNS_STORE, 'delete-many', { ids: ids.map(String) });
+                    await refreshGallery();
+                } catch (e) { alert('Verwijderen mislukt: ' + e.message); }
+            };
+
+            // Verplaatst geselecteerde mockups naar een nieuwe of bestaande collectie.
+            // target = { type: 'new', label } | { type: 'existing', runId }
+            const moveSelectionToCollection = async (ids, target) => {
+                if (!ids.length || !target) return;
+                let newRunId, newLabel;
+                if (target.type === 'new') {
+                    if (!target.label?.trim()) { alert('Vul een naam in.'); return; }
+                    newRunId = (typeof crypto !== 'undefined' && crypto.randomUUID)
+                        ? crypto.randomUUID()
+                        : `run-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+                    newLabel = target.label.trim();
+                } else if (target.type === 'existing') {
+                    const existing = savedDesigns.find(d => d.bulkRunId === target.runId);
+                    if (!existing) { alert('Collectie niet gevonden.'); return; }
+                    newRunId = target.runId;
+                    newLabel = existing.bulkRunLabel;
+                } else { return; }
+
+                try {
+                    for (const id of ids) {
+                        const d = savedDesigns.find(x => String(x.id) === String(id));
+                        if (!d) continue;
+                        await apiCall(DESIGNS_STORE, 'save', toDbDesign({
+                            ...d, bulkRunId: newRunId, bulkRunLabel: newLabel,
+                            // Reset run-share-token wanneer mockup naar andere run gaat
+                            runShareToken: null, runShareExpiresAt: null,
+                        }));
+                    }
+                    await refreshGallery();
+                } catch (e) { alert('Verplaatsen mislukt: ' + e.message); }
+            };
+
+            // Genereert een share-link voor een willekeurige selectie. Hergebruikt
+            // run_share_token: alle geselecteerde rows krijgen dezelfde token, ook
+            // als ze uit verschillende collecties komen. De share-URL is dan
+            // ?run=TOKEN — collega ziet exact die set mockups.
+            const shareSelection = async (ids) => {
+                if (!ids.length) return;
+                const designs = ids.map(id => savedDesigns.find(x => String(x.id) === String(id))).filter(Boolean);
+                if (!designs.length) return;
+
+                // Waarschuw als er al run-shares actief zijn
+                const conflicting = designs.filter(d => d.runShareToken);
+                if (conflicting.length > 0) {
+                    if (!confirm(`${conflicting.length} mockup(s) zijn al gedeeld als deel van een collectie. Een nieuwe selectie-share vervangt die. Doorgaan?`)) return;
+                }
+
+                const token = (typeof crypto !== 'undefined' && crypto.randomUUID)
+                    ? crypto.randomUUID()
+                    : `sel-${Date.now()}-${Math.random().toString(36).slice(2, 18)}`;
+                const expires = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+
+                try {
+                    for (const d of designs) {
+                        await apiCall(DESIGNS_STORE, 'save', toDbDesign({
+                            ...d, runShareToken: token, runShareExpiresAt: expires,
+                        }));
+                    }
+                    await refreshGallery();
+                    // Open de RunShareModal met een gefakete "selectie"-runInfo
+                    setShareModalRun({
+                        runId: '__selection__' + token,
+                        runLabel: `Selectie van ${designs.length} mockup${designs.length === 1 ? '' : 's'}`,
+                        prefilledToken: token,
+                        prefilledExpires: expires,
+                    });
+                } catch (e) { alert('Selectie-share aanmaken mislukt: ' + e.message); }
             };
 
             // Single-shot PNG download — gebruikt dezelfde renderToCanvas als de preview
@@ -2608,6 +2873,33 @@ Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
                                     </div>
                                 </div>
 
+                                {/* Save-to-collection picker (v3.1.2) */}
+                                <div className="bg-dark-900 rounded-lg p-3 border border-white/5 space-y-2">
+                                    <label className="block text-[10px] text-gray-500 uppercase tracking-wider">Save naar</label>
+                                    <select value={saveTargetMode} onChange={e => setSaveTargetMode(e.target.value)}
+                                        className="w-full bg-dark-800 border border-gray-700 rounded px-2 py-2 text-sm">
+                                        <option value="">Losse mockup (geen collectie)</option>
+                                        <option value="__new__">+ Nieuwe collectie…</option>
+                                        {(() => {
+                                            const seen = new Map();
+                                            for (const d of savedDesigns) {
+                                                if (d.bulkRunId && !seen.has(d.bulkRunId)) {
+                                                    seen.set(d.bulkRunId, d.bulkRunLabel || d.bulkRunId);
+                                                }
+                                            }
+                                            return Array.from(seen.entries()).map(([id, label]) => (
+                                                <option key={id} value={id}>{label}</option>
+                                            ));
+                                        })()}
+                                    </select>
+                                    {saveTargetMode === '__new__' && (
+                                        <input type="text" value={newCollectionName}
+                                            placeholder="Naam van nieuwe collectie"
+                                            onChange={e => setNewCollectionName(e.target.value)}
+                                            className="w-full bg-dark-800 border border-gray-700 rounded px-2 py-2 text-sm" />
+                                    )}
+                                </div>
+
                                 <div className="flex gap-2 pt-2">
                                     <button onClick={saveDesign} className="flex-1 bg-gray-700 text-white font-bold py-2.5 rounded-lg hover:bg-gray-600 flex items-center justify-center gap-2 text-sm">
                                         <Icons.Save /> Save
@@ -2632,6 +2924,9 @@ Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
                                 onDownload={downloadDesignAsPng}
                                 onRefresh={refreshGallery}
                                 refreshing={galleryRefreshing}
+                                onShareSelection={shareSelection}
+                                onDeleteSelection={deleteSelection}
+                                onMoveSelection={(ids, onDone) => setMoveModalState({ ids, onDone })}
                             />
                         )}
 
@@ -2751,6 +3046,15 @@ Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
                             onClose={() => setShareModalRun(null)}
                             onEnsureRunToken={ensureRunShareToken}
                             onRevokeRun={revokeRunShare}
+                        />
+                    )}
+
+                    {moveModalState && (
+                        <MoveCollectionModal
+                            ids={moveModalState.ids}
+                            designs={savedDesigns}
+                            onClose={() => { moveModalState.onDone?.(); setMoveModalState(null); }}
+                            onMove={moveSelectionToCollection}
                         />
                     )}
                 </div>
