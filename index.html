@@ -1366,9 +1366,12 @@ Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
 
         // ============== SHARE MODAL (v3.1) ==============
         // Toont share-URL voor één mockup. Genereert token bij eerste open.
-        function ShareModal({ design, onClose, onEnsureToken, onRevoke }) {
+        function ShareModal({ design, onClose, onEnsureToken, onRevoke, onMoveToNewCollection }) {
             const [resolved, setResolved] = useState(design);
             const [copied, setCopied] = useState(false);
+            const [collectionName, setCollectionName] = useState(`${design.bulkRunLabel || (design.content?.name) || 'Mockup'} - shared`);
+            const [moving, setMoving] = useState(false);
+            const [movedTo, setMovedTo] = useState(null);
 
             useEffect(() => {
                 let cancelled = false;
@@ -1429,6 +1432,36 @@ Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
                                 <div className="text-[11px] text-gray-500">
                                     Verloopt op: <span className="text-gray-300">{expiresStr}</span>
                                 </div>
+
+                                {/* Verplaats naar nieuwe collectie (v3.1.3) */}
+                                <div className="pt-3 border-t border-white/5 space-y-2">
+                                    <div className="text-[11px] text-gray-400">Maak hier een collectie van</div>
+                                    {movedTo ? (
+                                        <div className="text-xs text-green-400 bg-green-900/20 px-2 py-1.5 rounded">
+                                            ✓ Verplaatst naar collectie "{movedTo}"
+                                        </div>
+                                    ) : (
+                                        <div className="flex gap-2">
+                                            <input type="text" value={collectionName}
+                                                onChange={(e) => setCollectionName(e.target.value)}
+                                                className="flex-1 bg-dark-900 border border-gray-700 rounded px-2 py-2 text-xs" />
+                                            <button onClick={async () => {
+                                                if (!collectionName.trim()) return;
+                                                setMoving(true);
+                                                try {
+                                                    await onMoveToNewCollection(design.id, collectionName.trim());
+                                                    setMovedTo(collectionName.trim());
+                                                } catch (e) { alert('Verplaatsen mislukt: ' + e.message); }
+                                                setMoving(false);
+                                            }}
+                                                disabled={moving || !collectionName.trim()}
+                                                className="bg-purple-600 hover:bg-purple-500 text-white px-3 rounded text-xs font-bold whitespace-nowrap disabled:opacity-50">
+                                                {moving ? '…' : 'Verplaats'}
+                                            </button>
+                                        </div>
+                                    )}
+                                </div>
+
                                 <div className="flex gap-2 pt-2 border-t border-white/5">
                                     <button onClick={() => onRevoke(resolved)}
                                         className="text-[11px] text-red-400 hover:text-red-300">
@@ -1449,9 +1482,12 @@ Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
         // ============== RUN SHARE MODAL (v3.1.1) ==============
         // Eén share-link voor alle mockups in een bulk-run. Collega ziet
         // gallery van alle mockups en kan per stuk een foto uploaden.
-        function RunShareModal({ runInfo, onClose, onEnsureRunToken, onRevokeRun }) {
+        function RunShareModal({ runInfo, onClose, onEnsureRunToken, onRevokeRun, onMoveToNewCollection }) {
             const [resolved, setResolved] = useState(null);
             const [copied, setCopied] = useState(false);
+            const [collectionName, setCollectionName] = useState(`${runInfo.runLabel || 'Selectie'} - shared`);
+            const [moving, setMoving] = useState(false);
+            const [movedTo, setMovedTo] = useState(null);
 
             useEffect(() => {
                 // Prefilled case: selectie-share heeft de token al gegenereerd.
@@ -1516,6 +1552,36 @@ Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
                                 <div className="text-[11px] text-gray-500">
                                     Verloopt op: <span className="text-gray-300">{expiresStr}</span>
                                 </div>
+
+                                {/* Verplaats naar nieuwe collectie (v3.1.3) */}
+                                <div className="pt-3 border-t border-white/5 space-y-2">
+                                    <div className="text-[11px] text-gray-400">Maak hier een collectie van</div>
+                                    {movedTo ? (
+                                        <div className="text-xs text-green-400 bg-green-900/20 px-2 py-1.5 rounded">
+                                            ✓ Verplaatst naar collectie "{movedTo}"
+                                        </div>
+                                    ) : (
+                                        <div className="flex gap-2">
+                                            <input type="text" value={collectionName}
+                                                onChange={(e) => setCollectionName(e.target.value)}
+                                                className="flex-1 bg-dark-900 border border-gray-700 rounded px-2 py-2 text-xs" />
+                                            <button onClick={async () => {
+                                                if (!collectionName.trim() || !resolved?.token) return;
+                                                setMoving(true);
+                                                try {
+                                                    await onMoveToNewCollection(resolved.token, collectionName.trim());
+                                                    setMovedTo(collectionName.trim());
+                                                } catch (e) { alert('Verplaatsen mislukt: ' + e.message); }
+                                                setMoving(false);
+                                            }}
+                                                disabled={moving || !collectionName.trim()}
+                                                className="bg-purple-600 hover:bg-purple-500 text-white px-3 rounded text-xs font-bold whitespace-nowrap disabled:opacity-50">
+                                                {moving ? '…' : 'Verplaats'}
+                                            </button>
+                                        </div>
+                                    )}
+                                </div>
+
                                 <div className="flex gap-2 pt-2 border-t border-white/5">
                                     <button onClick={() => onRevokeRun(resolved?.token)}
                                         className="text-[11px] text-red-400 hover:text-red-300">
@@ -2618,7 +2684,9 @@ Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
 
             // Verplaatst geselecteerde mockups naar een nieuwe of bestaande collectie.
             // target = { type: 'new', label } | { type: 'existing', runId }
-            const moveSelectionToCollection = async (ids, target) => {
+            // opts.preserveShareTokens: behoud run_share_token zodat actieve
+            //   share-links blijven werken (gebruikt vanuit share-modals).
+            const moveSelectionToCollection = async (ids, target, opts = {}) => {
                 if (!ids.length || !target) return;
                 let newRunId, newLabel;
                 if (target.type === 'new') {
@@ -2638,10 +2706,12 @@ Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
                     for (const id of ids) {
                         const d = savedDesigns.find(x => String(x.id) === String(id));
                         if (!d) continue;
+                        const tokenFields = opts.preserveShareTokens
+                            ? { runShareToken: d.runShareToken, runShareExpiresAt: d.runShareExpiresAt }
+                            : { runShareToken: null, runShareExpiresAt: null };
                         await apiCall(DESIGNS_STORE, 'save', toDbDesign({
                             ...d, bulkRunId: newRunId, bulkRunLabel: newLabel,
-                            // Reset run-share-token wanneer mockup naar andere run gaat
-                            runShareToken: null, runShareExpiresAt: null,
+                            ...tokenFields,
                         }));
                     }
                     await refreshGallery();
@@ -3130,6 +3200,9 @@ Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
                             onClose={() => setShareModalDesign(null)}
                             onEnsureToken={ensureShareToken}
                             onRevoke={revokeShare}
+                            onMoveToNewCollection={(designId, label) =>
+                                moveSelectionToCollection([designId], { type: 'new', label }, { preserveShareTokens: true })
+                            }
                         />
                     )}
 
@@ -3139,6 +3212,13 @@ Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
                             onClose={() => setShareModalRun(null)}
                             onEnsureRunToken={ensureRunShareToken}
                             onRevokeRun={revokeRunShare}
+                            onMoveToNewCollection={async (token, label) => {
+                                const ids = savedDesigns
+                                    .filter(d => d.runShareToken === token)
+                                    .map(d => d.id);
+                                if (!ids.length) return;
+                                await moveSelectionToCollection(ids, { type: 'new', label }, { preserveShareTokens: true });
+                            }}
                         />
                     )}
 
