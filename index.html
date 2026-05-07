@@ -147,6 +147,9 @@
             awaiting_photo: !!d.awaitingPhoto,
             bulk_run_id: d.bulkRunId ?? null,
             bulk_run_label: d.bulkRunLabel ?? null,
+            // v3.1.1 — run-level share
+            run_share_token: d.runShareToken ?? null,
+            run_share_expires_at: d.runShareExpiresAt ?? null,
         });
         const fromDbDesign = (d) => ({
             id: d.id,
@@ -160,6 +163,8 @@
             awaitingPhoto: !!d.awaiting_photo,
             bulkRunId: d.bulk_run_id ?? null,
             bulkRunLabel: d.bulk_run_label ?? null,
+            runShareToken: d.run_share_token ?? null,
+            runShareExpiresAt: d.run_share_expires_at ?? null,
             createdAt: d.created_at ?? null,
         });
         const toDbKit = (k) => ({
@@ -1091,7 +1096,7 @@ Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
         // Toont opgeslagen mockups gegroepeerd per bulk-run. Ungrouped (single
         // saves zonder bulk_run_id) staan bovenaan. Per item: status-badge,
         // share-knop, download-knop, delete-knop.
-        function GalleryPanel({ designs, expandedRuns, toggleRunExpand, onLoad, onDelete, onDeleteRun, onShare, onDownload, onRefresh, refreshing }) {
+        function GalleryPanel({ designs, expandedRuns, toggleRunExpand, onLoad, onDelete, onDeleteRun, onShare, onShareRun, onDownload, onRefresh, refreshing }) {
             // Group designs by bulkRunId
             const groups = useMemo(() => {
                 const ungrouped = [];
@@ -1201,8 +1206,10 @@ Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
                                             {awaiting > 0 && <span className="text-yellow-400"> · {awaiting} wacht op foto</span>}
                                         </div>
                                     </div>
+                                    <button onClick={(e) => { e.stopPropagation(); onShareRun(g.runId, g.label); }}
+                                        className="text-[9px] text-gray-300 hover:text-blue-300 px-2 py-1 whitespace-nowrap">🔗 deel run</button>
                                     <button onClick={(e) => { e.stopPropagation(); onDeleteRun(g.runId, g.label); }}
-                                        className="text-[9px] text-gray-500 hover:text-red-300 px-2 py-1">🗑 hele run</button>
+                                        className="text-[9px] text-gray-500 hover:text-red-300 px-2 py-1 whitespace-nowrap">🗑 hele run</button>
                                 </div>
                                 {isOpen && (
                                     <div className="p-2 space-y-2 border-t border-white/5">
@@ -1285,6 +1292,84 @@ Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
                                     <button onClick={() => onRevoke(resolved)}
                                         className="text-[11px] text-red-400 hover:text-red-300">
                                         Token intrekken
+                                    </button>
+                                    <button onClick={onClose}
+                                        className="ml-auto bg-gray-700 hover:bg-gray-600 text-white text-sm font-bold py-1.5 px-4 rounded">
+                                        Sluit
+                                    </button>
+                                </div>
+                            </>
+                        )}
+                    </div>
+                </div>
+            );
+        }
+
+        // ============== RUN SHARE MODAL (v3.1.1) ==============
+        // Eén share-link voor alle mockups in een bulk-run. Collega ziet
+        // gallery van alle mockups en kan per stuk een foto uploaden.
+        function RunShareModal({ runInfo, onClose, onEnsureRunToken, onRevokeRun }) {
+            const [resolved, setResolved] = useState(null);
+            const [copied, setCopied] = useState(false);
+
+            useEffect(() => {
+                let cancelled = false;
+                (async () => {
+                    const r = await onEnsureRunToken(runInfo.runId, runInfo.runLabel);
+                    if (!cancelled) setResolved(r);
+                })();
+                return () => { cancelled = true; };
+            }, [runInfo.runId]);
+
+            const url = resolved?.token
+                ? `${window.location.origin}${window.location.pathname}?run=${resolved.token}`
+                : '';
+            const expiresStr = resolved?.expiresAt
+                ? new Date(resolved.expiresAt).toLocaleDateString('nl-NL')
+                : '—';
+
+            const copyUrl = async () => {
+                if (!url) return;
+                try {
+                    await navigator.clipboard.writeText(url);
+                    setCopied(true);
+                    setTimeout(() => setCopied(false), 2000);
+                } catch (e) { alert('Kopiëren faalde — selecteer handmatig.'); }
+            };
+
+            return (
+                <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4" onClick={onClose}>
+                    <div className="bg-dark-800 border border-white/10 rounded-2xl p-6 w-full max-w-md space-y-4 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+                        <div>
+                            <h3 className="text-lg font-bold">Deel hele run</h3>
+                            <p className="text-xs text-gray-400 mt-1">
+                                "{runInfo.runLabel}" — collega ziet alle mockups in deze campagne en kan per stuk een foto uploaden. Geen toegang tot de rest van de tool.
+                            </p>
+                        </div>
+
+                        {!url ? (
+                            <div className="text-center text-gray-500 py-4 text-sm">Run-token aanmaken…</div>
+                        ) : (
+                            <>
+                                <div>
+                                    <label className="block text-[11px] text-gray-400 mb-1">Run-share URL</label>
+                                    <div className="flex gap-2">
+                                        <input type="text" value={url} readOnly
+                                            className="flex-1 bg-dark-900 border border-gray-700 rounded px-2 py-2 text-xs font-mono"
+                                            onFocus={(e) => e.target.select()} />
+                                        <button onClick={copyUrl}
+                                            className="bg-blue-600 hover:bg-blue-500 text-white px-3 rounded text-xs font-bold whitespace-nowrap">
+                                            {copied ? '✓ Gekopieerd' : 'Kopieer'}
+                                        </button>
+                                    </div>
+                                </div>
+                                <div className="text-[11px] text-gray-500">
+                                    Verloopt op: <span className="text-gray-300">{expiresStr}</span>
+                                </div>
+                                <div className="flex gap-2 pt-2 border-t border-white/5">
+                                    <button onClick={() => onRevokeRun(runInfo.runId)}
+                                        className="text-[11px] text-red-400 hover:text-red-300">
+                                        Run-token intrekken
                                     </button>
                                     <button onClick={onClose}
                                         className="ml-auto bg-gray-700 hover:bg-gray-600 text-white text-sm font-bold py-1.5 px-4 rounded">
@@ -1596,7 +1681,7 @@ Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
                     <div>
                         <label className="block text-[11px] text-gray-400 mb-1">Campagne-naam (verplicht)</label>
                         <input type="text" value={campaignLabel}
-                            placeholder="Cosis januari 2026"
+                            placeholder="Vul campagne-naam in"
                             onChange={e => setCampaignLabel(e.target.value)}
                             className="w-full bg-dark-900 border border-gray-700 rounded px-2 py-2 text-sm" />
                         <p className="text-[10px] text-gray-500 mt-1">Verschijnt als naam in de Gallery én in bestandsnamen.</p>
@@ -1660,6 +1745,27 @@ Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
         }
 
         // ============== SHARE MODE (v3.1) ==============
+        // Public-action variant van apiCall (geen password header) — gebruikt
+        // door zowel ShareView als ShareRunView.
+        const sharePublicCall = async (action, payload) => {
+            const res = await fetch(FUNCTION_URL, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+                    'apikey': SUPABASE_ANON_KEY,
+                },
+                body: JSON.stringify({ action, payload }),
+            });
+            if (res.status === 410) throw new Error('Deze share-link is verlopen.');
+            if (res.status === 404) throw new Error('Deze share-link bestaat niet (meer).');
+            if (!res.ok) {
+                const txt = await res.text().catch(() => '');
+                throw new Error(`Server-fout: ${res.status} ${txt}`);
+            }
+            return await res.json();
+        };
+
         // Stripped-down view voor URLs met ?share=TOKEN. Geen login, geen sidebar.
         // De ontvanger ziet één mockup en kan een foto uploaden.
         function ShareView({ token }) {
@@ -1667,26 +1773,6 @@ Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
             const [error, setError] = useState('');
             const [uploading, setUploading] = useState(false);
             const [uploaded, setUploaded] = useState(false);
-
-            // Public-action variant van apiCall (geen password header)
-            const sharePublicCall = async (action, payload) => {
-                const res = await fetch(FUNCTION_URL, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
-                        'apikey': SUPABASE_ANON_KEY,
-                    },
-                    body: JSON.stringify({ action, payload }),
-                });
-                if (res.status === 410) throw new Error('Deze share-link is verlopen.');
-                if (res.status === 404) throw new Error('Deze share-link bestaat niet (meer).');
-                if (!res.ok) {
-                    const txt = await res.text().catch(() => '');
-                    throw new Error(`Server-fout: ${res.status} ${txt}`);
-                }
-                return await res.json();
-            };
 
             useEffect(() => {
                 let cancelled = false;
@@ -1770,29 +1856,139 @@ Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
             );
         }
 
+        // ============== SHARE RUN VIEW (v3.1.1) ==============
+        // Toont alle mockups in een bulk-run als gallery; elke mockup heeft
+        // zijn eigen upload-knop. Een collega vult zo in één sessie alle
+        // ontbrekende foto's voor de campagne in.
+        function ShareRunView({ token }) {
+            const [runData, setRunData] = useState(null); // { bulk_run_label, designs: [...] }
+            const [error, setError] = useState('');
+            const [uploadingId, setUploadingId] = useState(null);
+
+            const fetchRun = async () => {
+                try {
+                    const data = await sharePublicCall('share-get-run', { share_token: token });
+                    setRunData(data);
+                } catch (e) {
+                    setError(e.message);
+                }
+            };
+
+            useEffect(() => { fetchRun(); }, [token]);
+
+            const handleUpload = async (designId, e) => {
+                const file = e.target.files?.[0];
+                if (!file) return;
+                setUploadingId(designId);
+                setError('');
+                try {
+                    const imageData = await fileToImageData(file);
+                    await sharePublicCall('share-set-image-by-run', {
+                        share_token: token, design_id: designId, imageData,
+                    });
+                    await fetchRun();
+                } catch (err) {
+                    setError(err.message);
+                }
+                setUploadingId(null);
+                e.target.value = '';
+            };
+
+            if (error) {
+                return (
+                    <div className="h-screen flex items-center justify-center bg-dark-900 p-4">
+                        <div className="bg-dark-800 border border-red-700/50 rounded-2xl p-8 max-w-sm text-center">
+                            <h1 className="text-xl font-bold text-red-300 mb-2">Oeps</h1>
+                            <p className="text-sm text-gray-400">{error}</p>
+                        </div>
+                    </div>
+                );
+            }
+
+            if (!runData) {
+                return <div className="h-screen flex items-center justify-center text-gray-400 text-sm bg-dark-900">Mockups laden…</div>;
+            }
+
+            const awaiting = runData.designs.filter(d => d.awaiting_photo).length;
+
+            return (
+                <div className="min-h-screen bg-dark-900 py-8 px-4">
+                    <div className="max-w-2xl mx-auto text-center mb-8">
+                        <h1 className="text-2xl font-bold bg-gradient-to-r from-blue-400 to-purple-400 bg-clip-text text-transparent">SocialFrame · gedeelde campagne</h1>
+                        {runData.bulk_run_label && (
+                            <p className="text-sm text-gray-300 mt-2">{runData.bulk_run_label}</p>
+                        )}
+                        <p className="text-sm text-gray-400 mt-3">
+                            {runData.designs.length} mockup{runData.designs.length === 1 ? '' : 's'}
+                            {awaiting > 0 && <span className="text-yellow-400"> · {awaiting} wacht{awaiting === 1 ? '' : 'en'} op foto</span>}
+                        </p>
+                        <p className="text-xs text-gray-500 mt-2">Upload een foto per mockup. Andere velden zijn niet aan te passen.</p>
+                    </div>
+
+                    <div className="max-w-2xl mx-auto grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {runData.designs.map(d => {
+                            const isUploading = uploadingId === d.id;
+                            return (
+                                <div key={d.id} className="bg-dark-800 rounded-xl p-3 border border-white/5">
+                                    <div className="mb-3">
+                                        <CanvasPreview
+                                            platformId={d.platform_id}
+                                            formatId={d.format_id}
+                                            content={d.content}
+                                            style={d.style}
+                                        />
+                                    </div>
+                                    <div className="flex items-center justify-between gap-2">
+                                        <div className="text-[10px] flex-1 min-w-0">
+                                            {d.awaiting_photo ? (
+                                                <span className="text-yellow-400">📷 wacht op foto</span>
+                                            ) : (
+                                                <span className="text-green-400">✓ foto geplaatst</span>
+                                            )}
+                                        </div>
+                                        <label className="bg-white text-black font-bold py-1.5 px-3 rounded text-[11px] hover:bg-gray-200 cursor-pointer whitespace-nowrap">
+                                            {isUploading ? '…' : (d.content?.mainImage ? 'Vervang' : 'Upload foto')}
+                                            <input type="file" accept="image/*"
+                                                onChange={(e) => handleUpload(d.id, e)}
+                                                disabled={isUploading}
+                                                className="hidden" />
+                                        </label>
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </div>
+                </div>
+            );
+        }
+
         // ============== APP ==============
         function App() {
             // Check ?share=TOKEN op eerste render — als die er is, ga naar share-mode
-            // (geen password-gate, geen sidebar)
-            const [shareToken] = useState(() => {
-                if (typeof window === 'undefined') return null;
+            // (geen password-gate, geen sidebar). URL params worden eenmalig gelezen.
+            const urlParams = useMemo(() => {
+                if (typeof window === 'undefined') return { share: null, run: null };
                 const url = new URL(window.location.href);
-                return url.searchParams.get('share');
-            });
+                return {
+                    share: url.searchParams.get('share'),
+                    run: url.searchParams.get('run'),
+                };
+            }, []);
 
             const [authed, setAuthed] = useState(false);
             const [authChecking, setAuthChecking] = useState(true);
 
             useEffect(() => {
-                if (shareToken) { setAuthChecking(false); return; }
+                if (urlParams.share || urlParams.run) { setAuthChecking(false); return; }
                 const pw = localStorage.getItem(PW_STORAGE_KEY);
                 if (!pw) { setAuthChecking(false); return; }
                 apiCall(DESIGNS_STORE, 'list')
                     .then(() => { setAuthed(true); setAuthChecking(false); })
                     .catch(() => { setAuthChecking(false); });
-            }, [shareToken]);
+            }, [urlParams.share, urlParams.run]);
 
-            if (shareToken) return <ShareView token={shareToken} />;
+            if (urlParams.run) return <ShareRunView token={urlParams.run} />;
+            if (urlParams.share) return <ShareView token={urlParams.share} />;
 
             if (authChecking) {
                 return <div className="h-screen flex items-center justify-center text-gray-400 text-sm">Verbinding maken…</div>;
@@ -1824,6 +2020,7 @@ Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
             // Gallery state (v3.1)
             const [expandedRuns, setExpandedRuns] = useState(new Set());
             const [shareModalDesign, setShareModalDesign] = useState(null);
+            const [shareModalRun, setShareModalRun] = useState(null); // {runId, runLabel}
             const [galleryRefreshing, setGalleryRefreshing] = useState(false);
 
             const [content, setContent] = useState({
@@ -1971,10 +2168,16 @@ Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
 
             // Designs library (cloud)
             const saveDesign = async () => {
+                // Auto-detect "wacht op foto"-status zodat handmatige saves ook
+                // het juiste badge in de gallery krijgen.
+                const hasBriefing = (content.imageDescription && content.imageDescription.trim())
+                    || (content.imageText && content.imageText.trim());
+                const awaitingPhoto = !content.mainImage && !!hasBriefing;
                 const newDesign = {
                     id: Date.now(),
                     date: new Date().toLocaleDateString() + ' ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-                    platformId, formatId, content, style
+                    platformId, formatId, content, style,
+                    awaitingPhoto,
                 };
                 try {
                     await apiCall(DESIGNS_STORE, 'save', toDbDesign(newDesign));
@@ -2067,6 +2270,51 @@ Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
                     await apiCall(DESIGNS_STORE, 'delete-many', { ids: designs.map(d => String(d.id)) });
                     await refreshGallery();
                 } catch (e) { alert('Verwijderen mislukt: ' + e.message); }
+            };
+
+            // Run-level share (v3.1.1) — één link voor alle mockups in een bulk-run.
+            // Token wordt op elke row van de run gezet zodat de Edge Function bij
+            // share-get-run alle mockups in één keer terug kan geven.
+            const ensureRunShareToken = async (runId, runLabel) => {
+                const designs = savedDesigns.filter(d => d.bulkRunId === runId);
+                if (!designs.length) return null;
+                // Re-use existing token als alle rows er al een hebben
+                const existing = designs[0].runShareToken;
+                const allHaveSame = existing && designs.every(d => d.runShareToken === existing);
+                if (allHaveSame) {
+                    return { token: existing, expiresAt: designs[0].runShareExpiresAt, runLabel };
+                }
+                const token = (typeof crypto !== 'undefined' && crypto.randomUUID)
+                    ? crypto.randomUUID()
+                    : `run-tok-${Date.now()}-${Math.random().toString(36).slice(2, 18)}`;
+                const expires = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+                try {
+                    // Save token op elke row van de run (sequentieel om Edge Function-limieten te respecteren)
+                    for (const d of designs) {
+                        await apiCall(DESIGNS_STORE, 'save', toDbDesign({
+                            ...d, runShareToken: token, runShareExpiresAt: expires,
+                        }));
+                    }
+                    await refreshGallery();
+                    return { token, expiresAt: expires, runLabel };
+                } catch (e) {
+                    alert('Run-share aanmaken mislukt: ' + e.message);
+                    return null;
+                }
+            };
+
+            const revokeRunShare = async (runId) => {
+                if (!confirm('Run-share-link intrekken?')) return;
+                const designs = savedDesigns.filter(d => d.bulkRunId === runId);
+                try {
+                    for (const d of designs) {
+                        await apiCall(DESIGNS_STORE, 'save', toDbDesign({
+                            ...d, runShareToken: null, runShareExpiresAt: null,
+                        }));
+                    }
+                    await refreshGallery();
+                    setShareModalRun(null);
+                } catch (e) { alert('Revoken mislukt: ' + e.message); }
             };
 
             // Single-shot PNG download — gebruikt dezelfde renderToCanvas als de preview
@@ -2350,6 +2598,7 @@ Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
                                 onDelete={(id) => deleteDesign(id)}
                                 onDeleteRun={deleteRun}
                                 onShare={(d) => setShareModalDesign(d)}
+                                onShareRun={(runId, runLabel) => setShareModalRun({ runId, runLabel })}
                                 onDownload={downloadDesignAsPng}
                                 onRefresh={refreshGallery}
                                 refreshing={galleryRefreshing}
@@ -2463,6 +2712,15 @@ Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
                             onClose={() => setShareModalDesign(null)}
                             onEnsureToken={ensureShareToken}
                             onRevoke={revokeShare}
+                        />
+                    )}
+
+                    {shareModalRun && (
+                        <RunShareModal
+                            runInfo={shareModalRun}
+                            onClose={() => setShareModalRun(null)}
+                            onEnsureRunToken={ensureRunShareToken}
+                            onRevokeRun={revokeRunShare}
                         />
                     )}
                 </div>
