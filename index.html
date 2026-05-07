@@ -967,6 +967,9 @@
         // Garandeert dat preview === export (geen drift mogelijk).
         function CanvasPreview({ platformId, formatId, content, style, onEditField }) {
             const [src, setSrc] = useState(null);
+            const imgRef = useRef(null);
+            const [imgRect, setImgRect] = useState({ w: 0, h: 0 });
+
             useEffect(() => {
                 let cancelled = false;
                 (async () => {
@@ -979,25 +982,50 @@
                 return () => { cancelled = true; };
             }, [platformId, formatId, content, style]);
 
+            // Tracker voor de gerenderde img-grootte zodat hotspots in pixels
+            // kloppen ongeacht hoe de img schaalt naar max-w/h-full.
+            useEffect(() => {
+                if (!imgRef.current || !onEditField) return;
+                const el = imgRef.current;
+                const update = () => setImgRect({ w: el.offsetWidth, h: el.offsetHeight });
+                update();
+                const ro = new ResizeObserver(update);
+                ro.observe(el);
+                return () => ro.disconnect();
+            }, [src, onEditField]);
+
             if (!src) return <div className="text-gray-500 text-sm">Mockup wordt opgebouwd…</div>;
 
             const layout = PLATFORMS[platformId]?.layout;
             const hotspots = onEditField ? (EDIT_HOTSPOTS[layout] || []) : [];
 
+            // Zonder hotspots: behoud de oude (werkende) layout — losse img die
+            // direct flex-item is van de main, zodat max-w/h-full juist werkt.
+            if (!hotspots.length) {
+                return <img src={src} className="max-w-full max-h-full" alt="Mockup preview" />;
+            }
+
+            // Met hotspots: inline-flex shrink-naar-content wrapper, en hotspots
+            // krijgen pixel-coords berekend uit imgRect.
             return (
-                <div className="relative inline-block max-w-full max-h-full">
-                    <img src={src} className="block max-w-full max-h-full" alt="Mockup preview" />
-                    {hotspots.map(h => (
+                <div style={{
+                    position: 'relative', display: 'inline-flex',
+                    maxWidth: '100%', maxHeight: '100%', minWidth: 0, minHeight: 0,
+                }}>
+                    <img ref={imgRef} src={src}
+                        onLoad={() => imgRef.current && setImgRect({ w: imgRef.current.offsetWidth, h: imgRef.current.offsetHeight })}
+                        className="max-w-full max-h-full block" alt="Mockup preview" />
+                    {imgRect.w > 0 && hotspots.map(h => (
                         <button key={h.field}
                             type="button"
                             onClick={() => onEditField(h.field)}
                             title={`Bewerk ${h.label}`}
                             className="absolute group cursor-pointer hover:bg-blue-500/15 transition-colors"
                             style={{
-                                top: `${h.top * 100}%`,
-                                height: `${(h.bottom - h.top) * 100}%`,
-                                left: `${h.left * 100}%`,
-                                width: `${(h.right - h.left) * 100}%`,
+                                top: h.top * imgRect.h,
+                                left: h.left * imgRect.w,
+                                width: (h.right - h.left) * imgRect.w,
+                                height: (h.bottom - h.top) * imgRect.h,
                             }}>
                             <span className="opacity-0 group-hover:opacity-100 transition-opacity bg-blue-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded absolute top-1 left-1 whitespace-nowrap pointer-events-none">
                                 ✏ {h.label}
