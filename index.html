@@ -382,6 +382,39 @@
             ],
         };
 
+        // ============== CROP HELPERS (v3.1.5) ==============
+        // Berekent een default crop-rectangle (cover-fit, gecentreerd) voor een
+        // gegeven image en gewenst aspect (w/h).
+        const computeDefaultCrop = (imgWidth, imgHeight, targetAspect) => {
+            const imgAspect = imgWidth / imgHeight;
+            if (imgAspect >= targetAspect) {
+                const w = imgHeight * targetAspect;
+                return { x: (imgWidth - w) / 2, y: 0, w, h: imgHeight };
+            } else {
+                const h = imgWidth / targetAspect;
+                return { x: 0, y: (imgHeight - h) / 2, w: imgWidth, h };
+            }
+        };
+
+        // Tekent een main-image met optionele crop. Zonder crop: cover-fit
+        // gecentreerd. Met crop: gebruikt de crop-rectangle uit imageData.
+        const drawMainImage = (ctx, img, mainImage, dstX, dstY, dstW, dstH) => {
+            if (mainImage?.crop) {
+                const c = mainImage.crop;
+                ctx.drawImage(img, c.x, c.y, c.w, c.h, dstX, dstY, dstW, dstH);
+            } else {
+                const dstRatio = dstW / dstH;
+                const imgRatio = img.width / img.height;
+                let sw, sh, sx, sy;
+                if (imgRatio > dstRatio) {
+                    sh = img.height; sw = sh * dstRatio; sy = 0; sx = (img.width - sw) / 2;
+                } else {
+                    sw = img.width; sh = sw / dstRatio; sx = 0; sy = (img.height - sh) / 2;
+                }
+                ctx.drawImage(img, sx, sy, sw, sh, dstX, dstY, dstW, dstH);
+            }
+        };
+
         // ============== CHAR COUNT (v3.1.4) ==============
         // Toont het aantal tekens en kleurt op basis van de platform-limieten:
         //   <= recommended → groen
@@ -522,9 +555,13 @@
                 return { phoneHeight: sliderH, imgHeight: sliderH };
             }
 
-            const imgAspect = content.mainImage
-                ? content.mainImage.height / content.mainImage.width
-                : format.imgAspect;
+            // Crop heeft voorrang op natuurlijke aspect: bepaalt de zichtbare
+            // verhouding van de image in het mockup.
+            const imgAspect = content.mainImage?.crop
+                ? content.mainImage.crop.h / content.mainImage.crop.w
+                : (content.mainImage
+                    ? content.mainImage.height / content.mainImage.width
+                    : format.imgAspect);
             const imgH = phoneW * imgAspect;
 
             const measureCanvas = document.createElement('canvas');
@@ -612,7 +649,7 @@
 
             // Image (of rich placeholder met briefing-tekst)
             if (mainImg) {
-                ctx.drawImage(mainImg, phoneX, currentY, phoneW, imgH);
+                drawMainImage(ctx, mainImg, content.mainImage, phoneX, currentY, phoneW, imgH);
             } else if (!drawRichPlaceholder(ctx, phoneX, currentY, phoneW, imgH, content.imageDescription, content.imageText, scale)) {
                 ctx.fillStyle = '#27272a';
                 ctx.fillRect(phoneX, currentY, phoneW, imgH);
@@ -710,7 +747,7 @@
 
             // Image (full width, height per format), of rich placeholder
             if (mainImg) {
-                ctx.drawImage(mainImg, phoneX, currentY, phoneW, imgH);
+                drawMainImage(ctx, mainImg, content.mainImage, phoneX, currentY, phoneW, imgH);
             } else if (!drawRichPlaceholder(ctx, phoneX, currentY, phoneW, imgH, content.imageDescription, content.imageText, scale)) {
                 ctx.fillStyle = '#27272a';
                 ctx.fillRect(phoneX, currentY, phoneW, imgH);
@@ -787,12 +824,7 @@
             const avatarImg = content.avatar ? await loadImg(content.avatar.src) : null;
 
             if (mainImg) {
-                const ratio = mainImg.width / mainImg.height;
-                const targetRatio = phoneW / phoneH;
-                let sw, sh, sx, sy;
-                if (ratio > targetRatio) { sh = mainImg.height; sw = sh * targetRatio; sy = 0; sx = (mainImg.width - sw) / 2; }
-                else { sw = mainImg.width; sh = sw / targetRatio; sx = 0; sy = (mainImg.height - sh) / 2; }
-                ctx.drawImage(mainImg, sx, sy, sw, sh, phoneX, phoneY, phoneW, phoneH);
+                drawMainImage(ctx, mainImg, content.mainImage, phoneX, phoneY, phoneW, phoneH);
             } else if (!drawRichPlaceholder(ctx, phoneX, phoneY, phoneW, phoneH, content.imageDescription, content.imageText, scale)) {
                 ctx.fillStyle = '#27272a';
                 ctx.fillRect(phoneX, phoneY, phoneW, phoneH);
@@ -1544,6 +1576,154 @@ Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
 
         // ============== SHARE MODAL (v3.1) ==============
         // Toont share-URL voor één mockup. Genereert token bij eerste open.
+        // ============== CROP MODAL (v3.1.5) ==============
+        // Drag-to-pan + zoom-slider crop. Aspect ratio van de crop-rectangle is
+        // gelocked op het huidige format zodat de mockup-layout consistent blijft.
+        function CropModal({ image, formatAspect, onSave, onCancel }) {
+            const containerRef = useRef(null);
+            const [containerSize, setContainerSize] = useState({ w: 0, h: 0 });
+
+            // Initial crop: bestaande crop als die qua aspect klopt, anders default
+            const [crop, setCrop] = useState(() => {
+                if (image.crop) {
+                    const existingAspect = image.crop.w / image.crop.h;
+                    if (Math.abs(existingAspect - formatAspect) < 0.02) return image.crop;
+                }
+                return computeDefaultCrop(image.width, image.height, formatAspect);
+            });
+
+            // Meet container-grootte zodra die gemount is
+            useEffect(() => {
+                if (!containerRef.current) return;
+                const update = () => {
+                    const r = containerRef.current.getBoundingClientRect();
+                    setContainerSize({ w: r.width, h: r.height });
+                };
+                update();
+                const ro = new ResizeObserver(update);
+                ro.observe(containerRef.current);
+                return () => ro.disconnect();
+            }, []);
+
+            // Schaal voor display: image fit-binnen-container behoudens aspect
+            const displayScale = (containerSize.w && containerSize.h)
+                ? Math.min(containerSize.w / image.width, containerSize.h / image.height)
+                : 1;
+            const dispImgW = image.width * displayScale;
+            const dispImgH = image.height * displayScale;
+
+            // Drag-to-pan
+            const handleDragStart = (e) => {
+                e.preventDefault();
+                const startX = e.clientX, startY = e.clientY;
+                const startCropX = crop.x, startCropY = crop.y;
+                const onMove = (ev) => {
+                    const dx = (ev.clientX - startX) / displayScale;
+                    const dy = (ev.clientY - startY) / displayScale;
+                    setCrop(c => ({
+                        ...c,
+                        x: Math.max(0, Math.min(image.width - c.w, startCropX + dx)),
+                        y: Math.max(0, Math.min(image.height - c.h, startCropY + dy)),
+                    }));
+                };
+                const onUp = () => {
+                    window.removeEventListener('mousemove', onMove);
+                    window.removeEventListener('mouseup', onUp);
+                };
+                window.addEventListener('mousemove', onMove);
+                window.addEventListener('mouseup', onUp);
+            };
+
+            // Zoom (1.0 = max-coverage, hogere waarden = ingezoomd)
+            const maxCrop = computeDefaultCrop(image.width, image.height, formatAspect);
+            const currentZoom = maxCrop.w / crop.w;
+            const onZoom = (z) => {
+                const newW = maxCrop.w / z;
+                const newH = newW / formatAspect;
+                const cx = crop.x + crop.w / 2;
+                const cy = crop.y + crop.h / 2;
+                setCrop({
+                    x: Math.max(0, Math.min(image.width - newW, cx - newW / 2)),
+                    y: Math.max(0, Math.min(image.height - newH, cy - newH / 2)),
+                    w: newW,
+                    h: newH,
+                });
+            };
+
+            const reset = () => setCrop(computeDefaultCrop(image.width, image.height, formatAspect));
+
+            return (
+                <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4" onClick={onCancel}>
+                    <div className="bg-dark-800 rounded-2xl p-5 w-full max-w-3xl space-y-4 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+                        <div>
+                            <h3 className="text-lg font-bold">Crop foto</h3>
+                            <p className="text-xs text-gray-400 mt-1">
+                                Sleep om te kaderen, gebruik de zoom-slider voor close-ups. Aspect-ratio is gelocked op het huidige format.
+                            </p>
+                        </div>
+
+                        <div ref={containerRef} className="relative bg-black overflow-hidden mx-auto rounded-lg select-none"
+                             style={{ width: '100%', height: '60vh' }}>
+                            {dispImgW > 0 && (
+                                <>
+                                    <img src={image.src} draggable={false}
+                                        style={{
+                                            position: 'absolute',
+                                            left: (containerSize.w - dispImgW) / 2,
+                                            top: (containerSize.h - dispImgH) / 2,
+                                            width: dispImgW,
+                                            height: dispImgH,
+                                            userSelect: 'none',
+                                            pointerEvents: 'none',
+                                        }} />
+                                    <div onMouseDown={handleDragStart}
+                                        className="cursor-move"
+                                        style={{
+                                            position: 'absolute',
+                                            left: (containerSize.w - dispImgW) / 2 + crop.x * displayScale,
+                                            top: (containerSize.h - dispImgH) / 2 + crop.y * displayScale,
+                                            width: crop.w * displayScale,
+                                            height: crop.h * displayScale,
+                                            border: '2px solid white',
+                                            boxShadow: '0 0 0 9999px rgba(0,0,0,0.55)',
+                                        }}>
+                                        <div className="absolute inset-0 pointer-events-none"
+                                            style={{
+                                                backgroundImage: 'linear-gradient(rgba(255,255,255,0.2) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.2) 1px, transparent 1px)',
+                                                backgroundSize: '33.33% 33.33%',
+                                            }} />
+                                    </div>
+                                </>
+                            )}
+                        </div>
+
+                        <div>
+                            <label className="flex items-center justify-between text-[11px] text-gray-400 mb-1">
+                                <span>Zoom</span>
+                                <span className="text-gray-500">{currentZoom.toFixed(2)}×</span>
+                            </label>
+                            <input type="range" min="1" max="4" step="0.05" value={currentZoom}
+                                onChange={(e) => onZoom(parseFloat(e.target.value))}
+                                className="w-full" />
+                        </div>
+
+                        <div className="flex gap-2 pt-2 border-t border-white/5">
+                            <button onClick={reset} className="text-[11px] text-gray-400 hover:text-gray-200">
+                                Reset
+                            </button>
+                            <button onClick={onCancel} className="ml-auto text-sm text-gray-400 hover:text-gray-200 px-2">
+                                Annuleer
+                            </button>
+                            <button onClick={() => onSave(crop)}
+                                className="bg-white text-black text-sm font-bold py-1.5 px-4 rounded hover:bg-gray-200">
+                                Klaar
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
         function ShareModal({ design, onClose, onEnsureToken, onRevoke, onMoveToNewCollection }) {
             const [resolved, setResolved] = useState(design);
             const [copied, setCopied] = useState(false);
@@ -2536,6 +2716,8 @@ Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
             // saveTargetMode: '' (losse mockup) | '__new__' (nieuwe collectie) | runId (bestaand)
             const [saveTargetMode, setSaveTargetMode] = useState('');
             const [newCollectionName, setNewCollectionName] = useState('');
+            // Crop-modal (v3.1.5)
+            const [cropModalOpen, setCropModalOpen] = useState(false);
 
             const [content, setContent] = useState({
                 avatar: null,
@@ -3098,12 +3280,20 @@ Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
                                                     <input type="file" accept="image/*" onChange={e => handleImageUpload('mainImage', e)} />
                                                 </label>
                                                 {content.mainImage && (
-                                                    <button type="button"
-                                                        onClick={() => updateContent('mainImage', null)}
-                                                        title="Foto verwijderen"
-                                                        className="absolute top-1 right-1 bg-black/70 hover:bg-red-600 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs leading-none">
-                                                        ×
-                                                    </button>
+                                                    <>
+                                                        <button type="button"
+                                                            onClick={() => setCropModalOpen(true)}
+                                                            title="Crop foto"
+                                                            className="absolute top-1 right-8 bg-black/70 hover:bg-blue-600 text-white rounded-full w-5 h-5 flex items-center justify-center text-[10px] leading-none">
+                                                            ✂
+                                                        </button>
+                                                        <button type="button"
+                                                            onClick={() => updateContent('mainImage', null)}
+                                                            title="Foto verwijderen"
+                                                            className="absolute top-1 right-1 bg-black/70 hover:bg-red-600 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs leading-none">
+                                                            ×
+                                                        </button>
+                                                    </>
                                                 )}
                                             </div>
                                         </div>
@@ -3455,6 +3645,18 @@ Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
                             designs={savedDesigns}
                             onClose={() => { moveModalState.onDone?.(); setMoveModalState(null); }}
                             onMove={moveSelectionToCollection}
+                        />
+                    )}
+
+                    {cropModalOpen && content.mainImage && (
+                        <CropModal
+                            image={content.mainImage}
+                            formatAspect={1 / (FORMATS[formatId]?.imgAspect ?? (1350 / 1080))}
+                            onCancel={() => setCropModalOpen(false)}
+                            onSave={(crop) => {
+                                updateContent('mainImage', { ...content.mainImage, crop });
+                                setCropModalOpen(false);
+                            }}
                         />
                     )}
                 </div>
