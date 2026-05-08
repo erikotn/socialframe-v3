@@ -700,6 +700,7 @@
             currentY += 10 * scale;
 
             // Image (of rich placeholder met briefing-tekst)
+            const imageY_feedCta = currentY;
             if (mainImg) {
                 drawMainImage(ctx, mainImg, content.mainImage, phoneX, currentY, phoneW, imgH);
             } else if (!drawRichPlaceholder(ctx, phoneX, currentY, phoneW, imgH, content.imageDescription, content.imageText, scale)) {
@@ -711,6 +712,9 @@
                 drawCarouselIndicators(ctx, phoneX, currentY, phoneW, imgH, p.carouselTotal, scale);
             }
             currentY += imgH;
+            // v3.2 — terugmelden waar de image-area staat zodat carousel-cards
+            // 2..N verticaal kunnen uitlijnen met card 1's beeld
+            if (p.layoutInfo) { p.layoutInfo.imageY = imageY_feedCta; p.layoutInfo.imageH = imgH; }
 
             // Footer block
             const footerH = 80 * scale;
@@ -802,6 +806,7 @@
             currentY += headerOffset;
 
             // Image (full width, height per format), of rich placeholder
+            const imageY_feedIcons = currentY;
             if (mainImg) {
                 drawMainImage(ctx, mainImg, content.mainImage, phoneX, currentY, phoneW, imgH);
             } else if (!drawRichPlaceholder(ctx, phoneX, currentY, phoneW, imgH, content.imageDescription, content.imageText, scale)) {
@@ -813,6 +818,7 @@
                 drawCarouselIndicators(ctx, phoneX, currentY, phoneW, imgH, p.carouselTotal, scale);
             }
             currentY += imgH;
+            if (p.layoutInfo) { p.layoutInfo.imageY = imageY_feedIcons; p.layoutInfo.imageH = imgH; }
 
             // Icon row
             const iconRowH = 50 * scale;
@@ -1055,11 +1061,16 @@
             const safeW = phoneW - 40 * scale;
             const currentY = phoneY + 50 * scale;
 
+            // v3.2 — layoutInfo wordt door renderFeedCTA/Icons gevuld met de exacte
+            // Y/H van card 1's image-area, zodat carousel-cards 2..N daarmee
+            // verticaal kunnen uitlijnen (i.p.v. tegen de hele phone te centreren).
+            const layoutInfo = { imageY: null, imageH: null };
             const renderArgs = {
                 scale, phoneX, phoneY, phoneW, phoneH, safeX, safeW, currentY,
                 content, style, platform: usePlatform, darkMode: useDarkMode,
                 imgH: imgH_orig * scale, fontBold, fontReg,
                 carouselTotal: totalCards,
+                layoutInfo,
             };
 
             if (usePlatform.layout === 'feed-cta') await renderFeedCTA(ctx, renderArgs);
@@ -1075,12 +1086,14 @@
             else ctx.rect(phoneX + (phoneW - notchW) / 2, phoneY + 10 * scale, notchW, notchH);
             ctx.fill();
 
-            // v3.2 — Render standalone cards rechts van de phone, vertical-centered
+            // v3.2 — Render standalone cards rechts van de phone, uitgelijnd op
+            // de top van card 1's image-area (niet op de phone-midden).
             if (isCarousel) {
-                const cardY = phoneY + (phoneH - cardH) / 2;
+                const cardY = layoutInfo.imageY != null ? layoutInfo.imageY : (phoneY + (phoneH - cardH) / 2);
+                const useCardH = layoutInfo.imageH || cardH;
                 for (let i = 0; i < carouselExtras.length; i++) {
                     const cardX = phoneX + phoneW + cardSpacing + i * (cardW + cardSpacing);
-                    await renderStandaloneCard(ctx, carouselExtras[i], cardX, cardY, cardW, cardH, scale);
+                    await renderStandaloneCard(ctx, carouselExtras[i], cardX, cardY, cardW, useCardH, scale);
                 }
             }
 
