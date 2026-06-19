@@ -113,6 +113,14 @@
                 buttonText: 'Meer informatie',
                 buttonStyle: { bg: '#fff', text: '#000', border: 'transparent' },
             },
+            blank: {
+                name: 'Leeg scherm',
+                sponsorLabel: '',
+                avatarShape: 'circle',
+                layout: 'blank',
+                buttonText: '',
+                buttonStyle: { bg: 'transparent', text: '#000', border: 'transparent' },
+            },
         };
 
         // Text-limits per platform — practical recommendations based on what's
@@ -607,6 +615,14 @@
                 return { phoneHeight: sliderH, imgHeight: sliderH };
             }
 
+            // Leeg scherm: telefoon krijgt exact de verhouding van het gekozen
+            // format; de foto vult het scherm (cover) en wordt door de
+            // afgeronde phone-clip in de render-wrapper bijgesneden.
+            if (platform.layout === 'blank') {
+                const h = Math.round(phoneW * format.imgAspect);
+                return { phoneHeight: h, imgHeight: h };
+            }
+
             // Crop heeft voorrang op natuurlijke aspect: bepaalt de zichtbare
             // verhouding van de image in het mockup.
             const imgAspect = content.mainImage?.crop
@@ -884,6 +900,20 @@
             }
         }
 
+        // Leeg telefoonscherm: alleen de foto, full-bleed. Geen avatar, tekst,
+        // iconen of CTA. De render-wrapper heeft het scherm al afgerond geclipt,
+        // dus overhang van de foto valt automatisch buiten beeld.
+        async function renderBlank(ctx, p) {
+            const { scale, phoneX, phoneY, phoneW, phoneH, content } = p;
+            const mainImg = content.mainImage ? await loadImg(content.mainImage.src) : null;
+            if (mainImg) {
+                drawMainImage(ctx, mainImg, content.mainImage, phoneX, phoneY, phoneW, phoneH);
+            } else if (!drawRichPlaceholder(ctx, phoneX, phoneY, phoneW, phoneH, content.imageDescription, content.imageText, scale)) {
+                ctx.fillStyle = '#27272a';
+                ctx.fillRect(phoneX, phoneY, phoneW, phoneH);
+            }
+        }
+
         async function renderStory(ctx, p) {
             const { scale, phoneX, phoneY, phoneW, phoneH, safeX, content, platform, fontBold, fontReg } = p;
             const mainImg = content.mainImage ? await loadImg(content.mainImage.src) : null;
@@ -991,7 +1021,7 @@
             // Niet voor story-mode (TikTok), die werkt anders.
             const carouselExtras = (content.isCarousel && Array.isArray(content.carouselExtra))
                 ? content.carouselExtra : [];
-            const isCarousel = carouselExtras.length > 0 && usePlatform.layout !== 'story';
+            const isCarousel = carouselExtras.length > 0 && usePlatform.layout !== 'story' && usePlatform.layout !== 'blank';
             const totalCards = isCarousel ? 1 + carouselExtras.length : 1;
             const cardW = phoneW; // standalone cards same width as phone
             const cardH = imgH_orig * scale; // gelijk aan card 1's image-area-hoogte
@@ -1076,6 +1106,7 @@
             if (usePlatform.layout === 'feed-cta') await renderFeedCTA(ctx, renderArgs);
             else if (usePlatform.layout === 'feed-icons') await renderFeedIcons(ctx, renderArgs);
             else if (usePlatform.layout === 'story') await renderStory(ctx, renderArgs);
+            else if (usePlatform.layout === 'blank') await renderBlank(ctx, renderArgs);
 
             ctx.restore();
 
@@ -3008,12 +3039,14 @@ Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
                 const p = PLATFORMS[id];
                 setContent(prev => ({ ...prev, buttonText: p.buttonText }));
                 if (p.layout === 'story' && !FORMATS[formatId].isStory) setFormatId('story-9-16');
-                if (p.layout !== 'story' && FORMATS[formatId].isStory) setFormatId('feed-4-5');
+                // Leeg scherm: standaard 9:16, maar elk format blijft toegestaan.
+                if (p.layout === 'blank' && !FORMATS[formatId].isStory) setFormatId('story-9-16');
+                if (p.layout !== 'story' && p.layout !== 'blank' && FORMATS[formatId].isStory) setFormatId('feed-4-5');
             };
 
             const applyFormat = (id) => {
                 setFormatId(id);
-                if (FORMATS[id].isStory && PLATFORMS[platformId].layout !== 'story') setPlatformId('tiktok');
+                if (FORMATS[id].isStory && PLATFORMS[platformId].layout !== 'story' && PLATFORMS[platformId].layout !== 'blank') setPlatformId('tiktok');
                 if (!FORMATS[id].isStory && PLATFORMS[platformId].layout === 'story') setPlatformId('instagram');
             };
 
@@ -3440,8 +3473,8 @@ Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
                                     </div>
                                 </div>
 
-                                {/* v3.2 — Carousel-toggle, alleen voor feed-cta/feed-icons (niet voor story) */}
-                                {platform.layout !== 'story' && (
+                                {/* v3.2 — Carousel-toggle, alleen voor feed-cta/feed-icons (niet voor story/blank) */}
+                                {platform.layout !== 'story' && platform.layout !== 'blank' && (
                                     <div className="flex items-center justify-between bg-dark-900/50 border border-white/5 rounded px-3 py-2">
                                         <span className="text-sm text-gray-300 flex items-center gap-2">
                                             <span>🔁</span>
@@ -3497,8 +3530,8 @@ Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
                                         )}
                                     </h3>
                                     <div className="flex gap-3">
-                                        {/* Avatar — alleen voor card 1 (sender is global) */}
-                                        {activeCardIndex === 0 && (
+                                        {/* Avatar — alleen voor card 1 (sender is global); niet voor leeg scherm */}
+                                        {activeCardIndex === 0 && platform.layout !== 'blank' && (
                                             <div className="flex-1">
                                                 <label className="block text-[11px] text-gray-400 mb-1">Avatar</label>
                                                 <div className="relative">
@@ -3581,8 +3614,8 @@ Geef alleen TSV (incl. header-rij), geen uitleg eromheen.`;
                                     </div>
                                 )}
 
-                                {/* Social-context-velden — alleen card 1 (sender, posttekst, CTA, likes) */}
-                                {activeCardIndex === 0 && (
+                                {/* Social-context-velden — alleen card 1 (sender, posttekst, CTA, likes); niet voor leeg scherm */}
+                                {activeCardIndex === 0 && platform.layout !== 'blank' && (
                                 <div className="space-y-3">
                                     <h3 className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Content</h3>
                                     <div>
